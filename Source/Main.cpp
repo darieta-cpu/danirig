@@ -1,0 +1,36 @@
+#include <juce_gui_basics/juce_gui_basics.h>
+#include "MainComponent.h"
+
+class DaniRigApplication : public juce::JUCEApplication
+{
+public:
+    const juce::String getApplicationName() override    { return "DaniRig"; }
+    const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
+    bool moreThanOneInstanceAllowed() override          { return false; }
+
+    void initialise (const juce::String&) override { window = std::make_unique<MainWindow> (getApplicationName()); }
+    void shutdown() override { window.reset(); }
+    void systemRequestedQuit() override { quit(); }
+
+    class MainWindow : public juce::DocumentWindow
+    {
+    public:
+        explicit MainWindow (const juce::String& name)
+            : DocumentWindow (name, juce::Colour (0xff0e1012), DocumentWindow::allButtons)
+        {
+            setUsingNativeTitleBar (true);
+            setContentOwned (new dr::MainComponent(), true);
+            setResizable (true, true);
+            setResizeLimits (640, 380, 3000, 1800);
+            if (auto* c = getConstrainer()) c->setFixedAspectRatio (1280.0 / 760.0);
+            centreWithSize (1280, 760);
+            setVisible (true);
+        }
+        void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }
+    };
+
+private:
+    std::unique_ptr<MainWindow> window;
+};
+
+START_JUCE_APPLICATION (DaniRigApplication)
