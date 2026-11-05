@@ -1,0 +1,80 @@
+name: Build DaniRig
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    name: macOS (universal arm64 + x86_64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --target DaniRig -j $(sysctl -n hw.ncpu)
+
+      - name: Trova l'app e verifica che sia universale
+        run: |
+          APP=$(find build -name "DaniRig.app" -maxdepth 4 | head -n 1)
+          echo "APP=$APP" >> "$GITHUB_ENV"
+          lipo -info "$APP/Contents/MacOS/DaniRig"
+
+      - name: Firma ad-hoc (necessaria per far partire il binario arm64)
+        run: codesign --force --deep --sign - "$APP"
+
+      - name: Crea il DMG
+        run: |
+          mkdir -p dist/dmg
+          cp -R "$APP" dist/dmg/
+          ln -s /Applications dist/dmg/Applications
+          hdiutil create -volname "DaniRig" -srcfolder dist/dmg -ov -format UDZO dist/DaniRig-macOS-universal.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DaniRig-macOS-universal
+          path: dist/DaniRig-macOS-universal.dmg
+
+  windows:
+    name: Windows (x64, installer .exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (runtime MSVC statico: nessun redistributable da installare)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+
+      - name: Build
+        run: cmake --build build --config Release --target DaniRig --parallel
+
+      - name: Installer Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          $exe = (Get-ChildItem -Path build -Recurse -Filter DaniRig.exe | Select-Object -First 1).FullName
+          Write-Host "EXE: $exe"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DExePath=$exe" "/DAppVersion=0.1.0" installer\DaniRig.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DaniRig-Windows-Setup
+          path: installer/Output/DaniRig-Setup-*.exe
+
+  tests:
+    name: Test DSP (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dipendenze
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libfreetype-dev libfontconfig1-dev libgl-dev
+      - name: Configure + build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDANIRIG_BUILD_TESTS=ON
+          cmake --build build --target DaniRigTests -j $(nproc)
+      - name: Esegui i test
+        run: find build -name DaniRigTests -type f -perm -u+x | head -n 1 | xargs -I{} {}
