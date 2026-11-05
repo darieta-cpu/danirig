@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure (runtime MSVC statico: nessun redistributable da installare)
+      - name: Configure (runtime MSVC statico, nessun redistributable da installare)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build
