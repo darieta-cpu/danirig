@@ -6,6 +6,7 @@
 #include "dsp/Delay.h"
 #include "dsp/Reverb.h"
 #include "dsp/Resampler.h"
+#include "RigEngine.h"
 #include <juce_events/juce_events.h>
 #include <cstdio>
 #include <random>
@@ -168,6 +169,32 @@ int main (int argc, char** argv)
             a.collectGarbage();
         }
         else std::printf ("  (nessun modello passato: salto)\n");
+    }
+
+    std::printf ("[Ordine moduli + pedale NAM]\n");
+    {
+        RigEngine e;
+        CHECK (RigEngine::unpack (RigEngine::pack ({ 2, 0, 3, 1 }), 4) == std::vector<int> ({ 2, 0, 3, 1 }), "pack/unpack dell'ordine");
+        CHECK (e.getPreOrder() == std::vector<int> ({ 0, 2, 3, 1 }), "ordine di default: gate, od, dist, pedale NAM (poi l'ampli)");
+        e.setPreOrder ({ 3, 1, 0, 2 }); e.setPostOrder ({ 1, 0 });
+        auto xml = e.saveState();
+        RigEngine e2; e2.loadState (*xml);
+        CHECK (e2.getPreOrder() == std::vector<int> ({ 3, 1, 0, 2 }) && e2.getPostOrder() == std::vector<int> ({ 1, 0 }), "l'ordine viene salvato e ripristinato");
+        xml->setAttribute ("preOrder", 0x1111);                       // permutazione non valida
+        RigEngine e3; e3.loadState (*xml);
+        CHECK (e3.getPreOrder() == std::vector<int> ({ 0, 2, 3, 1 }), "ordine corrotto -> default");
+        CHECK (e.pedal.bass == nullptr && e.amp.bass != nullptr, "il pedale NAM non ha EQ, l'ampli sì");
+        CHECK (e.pedal.enabled->get() == 0.0f, "il pedale NAM parte spento");
+        if (argc > 1 && juce::File (argv[1]).existsAsFile())
+        {
+            NamAmp p ("nampedal", "NAM PEDAL", false);
+            p.loadModelAsync (juce::File (argv[1])); p.prepare (sr, block);
+            for (int i = 0; i < 200 && ! p.getInfo().loaded; ++i) juce::Thread::sleep (50);
+            auto x = sine (sr, 220, 0.1, 24064);
+            for (size_t i = 0; i + block <= x.size(); i += block) p.run (x.data() + i, block);
+            CHECK (p.getInfo().loaded && finite (x) && rms (x, 12000, 24000) > 1e-4f, "pedale NAM: carica e suona");
+            p.collectGarbage();
+        }
     }
 
     if (argc > 1 && juce::File (argv[1]).existsAsFile())

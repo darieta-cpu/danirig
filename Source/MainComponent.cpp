@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include <limits>
 
 namespace dr
 {
@@ -33,6 +34,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (content);
 
     gatePanel  = std::make_unique<GatePanel> (engine.gate);
+    pedalPanel = std::make_unique<NamPedalPanel> (engine.pedal);
     odPanel    = std::make_unique<PedalPanel> (engine.od,   juce::Colour (0xff3f9a45), juce::Colours::white, juce::Colour (0xff1c2a1e), juce::Colours::white);
     distPanel  = std::make_unique<PedalPanel> (engine.dist, juce::Colour (0xffe8791d), juce::Colour (0xff160c04), juce::Colour (0xff1b1109), juce::Colour (0xfff2f2f2));
     ampPanel   = std::make_unique<AmpPanel> (engine.amp);
@@ -41,18 +43,28 @@ MainComponent::MainComponent()
     reverbPanel = std::make_unique<ReverbPanel> (engine.reverb);
     flow       = std::make_unique<FlowPanel> (engine);
 
-    for (juce::Component* c : std::initializer_list<juce::Component*> { gatePanel.get(), odPanel.get(), distPanel.get(), flow.get(),
+    for (juce::Component* c : std::initializer_list<juce::Component*> { gatePanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get(), flow.get(),
                                                                        ampPanel.get(), cabPanel.get(), delayPanel.get(), reverbPanel.get() })
         content.addAndMakeVisible (c);
 
-    gatePanel->setBounds (20, 78, 210, 220);
-    odPanel->setBounds (240, 78, 240, 220);
-    distPanel->setBounds (490, 78, 240, 220);
-    flow->setBounds (740, 78, 520, 220);
+    // dimensioni fisse dei pannelli; le posizioni dei gruppi riordinabili le decide layoutGroup()
+    for (auto* p : std::initializer_list<ui::PanelBase*> { gatePanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get() }) p->setSize (230, 220);
+    delayPanel->setSize (440, 220);
+    reverbPanel->setSize (300, 220);
+    flow->setBounds (980, 78, 280, 220);
     ampPanel->setBounds (20, 306, 1240, 210);
     cabPanel->setBounds (20, 524, 480, 220);
-    delayPanel->setBounds (510, 524, 440, 220);
-    reverbPanel->setBounds (960, 524, 300, 220);
+
+    preGroup.panels  = { gatePanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get() };   // indici = engine.preMods
+    preGroup.x = 20;  preGroup.y = 78;
+    postGroup.panels = { delayPanel.get(), reverbPanel.get() };                                  // indici = engine.postMods
+    postGroup.x = 510; postGroup.y = 524;
+    for (auto* g : { &preGroup, &postGroup })
+        for (auto* p : g->panels)
+        {
+            p->reorderable = true;
+            p->onReorder = [this, g] (ui::PanelBase& pb, int phase) { handleReorder (*g, pb, phase); };
+        }
 
     // barra superiore
     for (auto* b : { &audioBtn, &saveBtn, &loadBtn, &resetBtn }) content.addAndMakeVisible (*b);
@@ -80,6 +92,7 @@ MainComponent::MainComponent()
 
     loadSettings();
     refreshAll();
+    applyOrderFromEngine (false);
 
     // audio: 48 kHz / 128 campioni come punto di partenza, poi lo stato salvato dell'utente
     std::unique_ptr<juce::XmlElement> savedAudio;
@@ -120,15 +133,79 @@ void MainComponent::timerCallback()
     flow->cpu = (float) deviceManager.getCpuUsage();
     flow->repaint();
     gatePanel->repaint();
-    if ((++tick & 3) == 0) { ampPanel->repaint(); cabPanel->repaint(); delayPanel->repaint(); }
+    if ((++tick & 3) == 0) { ampPanel->repaint(); cabPanel->repaint(); delayPanel->repaint(); pedalPanel->repaint(); }
 }
 
 void MainComponent::refreshAll()
 {
-    for (auto* p : std::initializer_list<PanelBase*> { gatePanel.get(), odPanel.get(), distPanel.get(), ampPanel.get(), cabPanel.get(), delayPanel.get(), reverbPanel.get() })
+    for (auto* p : std::initializer_list<PanelBase*> { gatePanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get(), ampPanel.get(), cabPanel.get(), delayPanel.get(), reverbPanel.get() })
         p->refresh();
+    applyOrderFromEngine (true);
     trimKnob->refresh(); masterKnob->refresh();
     inputBox.setSelectedId (engine.inputChannel->index(), juce::dontSendNotification);
+}
+
+// ---------------------------------------------------------------------------------------------
+void MainComponent::layoutGroup (Group& g, ui::PanelBase* skip, bool animate)
+{
+    int x = g.x;
+    auto& animator = juce::Desktop::getInstance().getAnimator();
+    for (auto* p : g.order)
+    {
+        const juce::Rectangle<int> b (x, g.y, p->getWidth(), p->getHeight());
+        if (p != skip)
+        {
+            if (animate) animator.animateComponent (p, b, 1.0f, 140, false, 1.0, 1.0);
+            else { animator.cancelAnimation (p, false); p->setBounds (b); }
+        }
+        x += p->getWidth() + g.gap;
+    }
+}
+
+void MainComponent::handleReorder (Group& g, ui::PanelBase& p, int phase)
+{
+    if (phase == 1)
+    {
+        std::vector<ui::PanelBase*> others;
+        for (auto* q : g.order) if (q != &p) others.push_back (q);
+        const int dragCentre = p.getX() + p.getWidth() / 2;
+        int bestK = 0, bestDist = std::numeric_limits<int>::max();
+        for (int k = 0; k <= (int) others.size(); ++k)       // dove inserire il pannello trascinato
+        {
+            int x = g.x, centre = 0;
+            for (int i = 0; i <= (int) others.size(); ++i)
+            {
+                if (i == k) { centre = x + p.getWidth() / 2; x += p.getWidth() + g.gap; }
+                if (i < (int) others.size()) x += others[(size_t) i]->getWidth() + g.gap;
+            }
+            if (std::abs (centre - dragCentre) < bestDist) { bestDist = std::abs (centre - dragCentre); bestK = k; }
+        }
+        others.insert (others.begin() + bestK, &p);
+        if (others != g.order) { g.order = others; layoutGroup (g, &p, true); }
+    }
+    else if (phase == 2)
+    {
+        layoutGroup (g, nullptr, true);     // il pannello trascinato scivola nel suo slot
+        pushOrderToEngine();
+    }
+}
+
+void MainComponent::pushOrderToEngine()
+{
+    std::vector<int> pre, post;
+    for (auto* p : preGroup.order)  pre.push_back (engine.preIndexOf (&p->module));
+    for (auto* p : postGroup.order) post.push_back (engine.postIndexOf (&p->module));
+    engine.setPreOrder (pre);
+    engine.setPostOrder (post);
+}
+
+void MainComponent::applyOrderFromEngine (bool animate)
+{
+    preGroup.order.clear(); postGroup.order.clear();
+    for (int idx : engine.getPreOrder())  preGroup.order.push_back (preGroup.panels[(size_t) idx]);
+    for (int idx : engine.getPostOrder()) postGroup.order.push_back (postGroup.panels[(size_t) idx]);
+    layoutGroup (preGroup, nullptr, animate);
+    layoutGroup (postGroup, nullptr, animate);
 }
 
 void MainComponent::showAudioSettings()

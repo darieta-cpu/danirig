@@ -19,7 +19,7 @@ struct ModelInfo
 class NamAmp : public MonoModule
 {
 public:
-    NamAmp();
+    explicit NamAmp (const juce::String& id = "amp", const juce::String& titleText = "NAM AMP", bool withEq = true);
     ~NamAmp() override;
 
     void prepare (double sampleRate, int maxBlock) override;
@@ -34,7 +34,7 @@ public:
     ModelInfo getInfo() const;
     void collectGarbage();                    // libera i modelli scartati dal thread audio
 
-    Param *inputDb, *bass, *mid, *treble, *outputDb, *normalize, *quality;
+    Param *inputDb, *bass = nullptr, *mid = nullptr, *treble = nullptr, *outputDb, *normalize, *quality;   // bass/mid/treble: solo con EQ
 
 private:
     struct Impl;

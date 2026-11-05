@@ -38,6 +38,29 @@ public:
         return toggles.back().get();
     }
 
+    // Riordino: si trascina dalla fascia alta (primi 26 px) del pannello.
+    bool reorderable = false;
+    std::function<void (PanelBase&, int)> onReorder;   // 0 = inizio, 1 = trascinamento, 2 = rilascio
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        if (reorderable && e.y < 26 && onReorder) { dragging = true; grabX = e.x; toFront (false); onReorder (*this, 0); }
+    }
+    void mouseDrag (const juce::MouseEvent& e) override
+    {
+        if (! dragging || getParentComponent() == nullptr) return;
+        setTopLeftPosition (e.getEventRelativeTo (getParentComponent()).x - grabX, getY());
+        onReorder (*this, 1);
+    }
+    void mouseUp (const juce::MouseEvent&) override
+    {
+        if (dragging) { dragging = false; onReorder (*this, 2); }
+    }
+    void mouseMove (const juce::MouseEvent& e) override
+    {
+        setMouseCursor (reorderable && e.y < 26 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
+    }
+
     virtual void refresh()
     {
         for (auto& k : knobs) k->refresh();
@@ -63,6 +86,12 @@ public:
             case Look::Amp:   paintAmp (g, r);   break;
             case Look::Cab:   paintCab (g, r);   break;
             case Look::Rack:  paintRack (g, r);  break;
+        }
+        if (reorderable)   // maniglia di trascinamento
+        {
+            const float x0 = (float) getWidth() - (look == Look::Rack ? 80.0f : 48.0f);
+            g.setColour (juce::Colours::black.withAlpha (look == Look::Rack ? 0.45f : 0.35f));
+            for (int c = 0; c < 2; ++c) for (int rr = 0; rr < 3; ++rr) g.fillEllipse (x0 + (float) c * 5.0f, 8.0f + (float) rr * 5.0f, 2.6f, 2.6f);
         }
     }
 
@@ -146,6 +175,8 @@ protected:
     }
 
     juce::Rectangle<int> titleArea;
+    bool dragging = false;
+    int grabX = 0;
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<std::unique_ptr<ChoiceBox>> choices;
     std::vector<std::unique_ptr<LedToggle>> toggles;
@@ -230,6 +261,64 @@ public:
         titleArea = r.removeFromTop (26);
         footswitch.setBounds (juce::Rectangle<int> (52, 52).withCentre ({ getWidth() / 2, getHeight() - 38 }));
     }
+};
+
+// ---------------------------------------------------------------------------------------------
+// Pedale "NAM": carica il profilo NAM di un pedale (overdrive, boost, fuzz...) da mettere davanti all'ampli.
+class NamPedalPanel : public PanelBase
+{
+public:
+    explicit NamPedalPanel (NamAmp& a)
+        : PanelBase (a, Look::Stomp, juce::Colour (0xff6a3fa0), juce::Colours::white, juce::Colour (0xff1e1428), juce::Colours::white), pedal (a)
+    {
+        addKnob (*a.inputDb); addKnob (*a.outputDb);
+        norm = addToggle (*a.normalize, "AUTO");
+        sizeBox = addChoice (*a.quality);
+        sizeBox->extra = [this] { pedal.reloadCurrent(); };
+        addAndMakeVisible (load); addAndMakeVisible (prev); addAndMakeVisible (next);
+        load.setButtonText ("LOAD..."); prev.setButtonText ("<"); next.setButtonText (">");
+        load.onClick = [this] { stepper.choose ("Scegli il profilo NAM di un pedale", "*.nam", [this] (const juce::File& f) { pedal.loadModelAsync (f); }); };
+        prev.onClick = [this] { auto f = FileStepper::step (juce::File (pedal.getModelPath()), ".nam", -1); if (f.existsAsFile()) pedal.loadModelAsync (f); };
+        next.onClick = [this] { auto f = FileStepper::step (juce::File (pedal.getModelPath()), ".nam", +1); if (f.existsAsFile()) pedal.loadModelAsync (f); };
+    }
+
+    void resized() override
+    {
+        const int w = getWidth();
+        titleArea = juce::Rectangle<int> (16, 6, 110, 22);
+        slotArea = juce::Rectangle<int> (12, 32, w - 24, 22);
+        prev.setBounds (12, 58, 32, 24); next.setBounds (w - 44, 58, 32, 24); load.setBounds (48, 58, w - 96, 24);
+        knobs[0]->setBounds (10, 86, 66, 78); knobs[1]->setBounds (78, 86, 66, 78);
+        norm->setBounds (w - 78, 96, 70, 22);
+        sizeBox->setBounds (w - 76, 126, 62, 26);
+        footswitch.setBounds (juce::Rectangle<int> (48, 48).withCentre ({ w / 2, getHeight() - 28 }));
+    }
+
+    void paintTitle (juce::Graphics& g, juce::Rectangle<int> a) override
+    {
+        g.setColour (textCol);
+        g.setFont (juce::Font (juce::FontOptions (16.0f, juce::Font::bold | juce::Font::italic)));
+        g.drawText (module.title, a, juce::Justification::centredLeft);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        PanelBase::paint (g);
+        auto info = pedal.getInfo();
+        auto s = slotArea.toFloat();
+        g.setColour (juce::Colours::black.withAlpha (0.55f)); g.fillRoundedRectangle (s, 4.0f);
+        g.setFont (uiFont (12.0f, true));
+        g.setColour (info.error.isNotEmpty() ? juce::Colours::orange : juce::Colours::white);
+        auto t = info.error.isNotEmpty() ? info.error : info.loading ? juce::String ("Caricamento...") : info.name.isEmpty() ? juce::String ("Nessun profilo") : info.name;
+        g.drawFittedText (t, slotArea.reduced (6, 0), juce::Justification::centredLeft, 1);
+    }
+
+private:
+    NamAmp& pedal;
+    FileStepper stepper;
+    juce::TextButton load, prev, next;
+    LedToggle* norm; ChoiceBox* sizeBox;
+    juce::Rectangle<int> slotArea;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -420,7 +509,7 @@ public:
 };
 
 // ---------------------------------------------------------------------------------------------
-// Schema del segnale + stato audio
+// Schema del segnale (segue l'ordine reale dei moduli) + stato audio
 class FlowPanel : public juce::Component
 {
 public:
@@ -434,54 +523,58 @@ public:
         g.fillRoundedRectangle (r, 10.0f);
         g.setColour (juce::Colour (0xff30343a)); g.drawRoundedRectangle (r, 10.0f, 1.5f);
 
-        g.setColour (col::gold); g.setFont (uiFont (14.0f, true));
-        g.drawText ("SIGNAL CHAIN", 18, 12, 200, 20, juce::Justification::centredLeft);
+        g.setColour (col::gold); g.setFont (uiFont (13.0f, true));
+        g.drawText ("SIGNAL CHAIN", 16, 10, 200, 18, juce::Justification::centredLeft);
 
         struct Node { juce::String label; bool active; };
         std::vector<Node> nodes { { "IN", true } };
-        const char* shortNames[] = { "GATE", "OD", "DIST", "AMP", "CAB" };
-        int k = 0;
-        for (auto* m : engine.monoChain) nodes.push_back ({ shortNames[k++], m->isActive() });
-        nodes.push_back ({ "DLY", engine.delay.isActive() });
-        nodes.push_back ({ "REV", engine.reverb.isActive() });
+        auto shortName = [] (const juce::String& id)
+        {
+            if (id == "gate") return "GATE"; if (id == "nampedal") return "NAM P"; if (id == "od") return "OD"; if (id == "dist") return "DIST";
+            if (id == "amp") return "AMP"; if (id == "cab") return "CAB"; if (id == "delay") return "DLY"; return "REV";
+        };
+        for (int k : engine.getPreOrder())  nodes.push_back ({ shortName (engine.preMods[k]->moduleId),  engine.preMods[k]->isActive() });
+        nodes.push_back ({ "AMP", engine.amp.isActive() });
+        nodes.push_back ({ "CAB", engine.cab.isActive() });
+        for (int k : engine.getPostOrder()) nodes.push_back ({ shortName (engine.postMods[k]->moduleId), engine.postMods[k]->isActive() });
         nodes.push_back ({ "OUT", true });
 
-        const float nw = 46.0f, gap = 5.0f;
-        float x = r.getX() + 22.0f;
-        const float y = r.getY() + 54.0f;
-        for (size_t i = 0; i < nodes.size(); ++i)
+        float x = 16.0f, y = 36.0f;
+        const float maxX = (float) getWidth() - 14.0f, h = 22.0f;
+        g.setFont (uiFont (11.0f, true));
+        for (auto& n : nodes)
         {
-            auto box = juce::Rectangle<float> (x, y, nw, 40.0f);
-            g.setColour (nodes[i].active ? juce::Colour (0xff2a3a2e) : juce::Colour (0xff202226));
-            g.fillRoundedRectangle (box, 6.0f);
-            g.setColour (nodes[i].active ? col::ledGreen : juce::Colour (0xff45494f));
-            g.drawRoundedRectangle (box, 6.0f, 1.5f);
-            g.setFont (uiFont (12.0f, true));
-            g.setColour (nodes[i].active ? col::text : col::dim);
-            g.drawText (nodes[i].label, box, juce::Justification::centred);
-            x += nw;
-            if (i + 1 < nodes.size()) { g.setColour (col::dim); g.drawLine (x, y + 20, x + gap, y + 20, 1.5f); x += gap; }
+            const float w = 16.0f + 6.6f * (float) n.label.length();
+            if (x + w > maxX) { x = 16.0f; y += h + 6.0f; }
+            auto box = juce::Rectangle<float> (x, y, w, h);
+            g.setColour (n.active ? juce::Colour (0xff2a3a2e) : juce::Colour (0xff202226));
+            g.fillRoundedRectangle (box, 5.0f);
+            g.setColour (n.active ? col::ledGreen : juce::Colour (0xff45494f));
+            g.drawRoundedRectangle (box, 5.0f, 1.2f);
+            g.setColour (n.active ? col::text : col::dim);
+            g.drawText (n.label, box, juce::Justification::centred);
+            x += w + 5.0f;
         }
 
         const double sr = engine.sampleRate.load();
         const int buf = engine.bufferSize.load();
         const int drv = engine.driverLatency.load(), chain = engine.chainLatency.load();
-        g.setFont (uiFont (14.0f)); g.setColour (col::text);
-        auto text = r.reduced (22.0f, 0).withTrimmedTop (110.0f);
+        auto text = r.reduced (16.0f, 0).withTrimmedTop (y + h + 14.0f);
+        g.setFont (uiFont (12.0f)); g.setColour (col::text);
         if (sr > 0)
         {
             const double msBuf = 1000.0 * buf / sr, msDrv = 1000.0 * drv / sr, msChain = 1000.0 * chain / sr;
-            g.drawText (juce::String (sr / 1000.0, 1) + " kHz   -   buffer " + juce::String (buf) + " campioni (" + juce::String (msBuf, 1) + " ms)",
-                        text.removeFromTop (24), juce::Justification::centredLeft);
+            g.drawText (juce::String (sr / 1000.0, 1) + " kHz  -  buffer " + juce::String (buf) + " (" + juce::String (msBuf, 1) + " ms)",
+                        text.removeFromTop (18), juce::Justification::centredLeft);
             g.setColour (col::dim);
-            g.drawText ("Latenza driver in+out: " + juce::String (msDrv, 1) + " ms   -   elaborazione interna: +" + juce::String (msChain, 2) + " ms",
-                        text.removeFromTop (22), juce::Justification::centredLeft);
-            g.drawText ("CPU audio: " + juce::String (juce::roundToInt (cpu * 100.0f)) + " %", text.removeFromTop (22), juce::Justification::centredLeft);
+            g.drawText ("Driver in+out: " + juce::String (msDrv, 1) + " ms  -  DSP: +" + juce::String (msChain, 2) + " ms",
+                        text.removeFromTop (18), juce::Justification::centredLeft);
+            g.drawText ("CPU audio: " + juce::String (juce::roundToInt (cpu * 100.0f)) + " %", text.removeFromTop (18), juce::Justification::centredLeft);
         }
         else
         {
             g.setColour (juce::Colours::orange);
-            g.drawText ("Nessun dispositivo audio attivo: apri Audio Settings", text.removeFromTop (24), juce::Justification::centredLeft);
+            g.drawText ("Nessun device audio: apri Audio Settings", text.removeFromTop (18), juce::Justification::centredLeft);
         }
     }
 private:

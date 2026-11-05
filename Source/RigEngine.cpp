@@ -8,22 +8,24 @@ RigEngine::RigEngine()
     inputTrim    = &globals.addFloat ("trim", "Input Trim", -24.0f, 24.0f, 0.0f, " dB", 1);
     master       = &globals.addFloat ("master", "Master", -40.0f, 6.0f, -6.0f, " dB", 1);
 
-    monoChain   = { &gate, &od, &dist, &amp, &cab };
-    stereoChain = { &delay, &reverb };
+    preMods[0] = &gate; preMods[1] = &pedal; preMods[2] = &od; preMods[3] = &dist;
+    postMods[0] = &delay; postMods[1] = &reverb;
 
     // Valori iniziali: pedali spenti (si accendono con il footswitch), amp/cab/delay/reverb attivi.
-    od.enabled->set (0.0f);
-    dist.enabled->set (0.0f);
-    delay.enabled->set (0.0f);
-    reverb.enabled->set (0.0f);
-    od.enabled->defV = dist.enabled->defV = delay.enabled->defV = reverb.enabled->defV = 0.0f;
+    for (Module* m : std::initializer_list<Module*> { &pedal, &od, &dist, &delay, &reverb })
+    {
+        m->enabled->set (0.0f);
+        m->enabled->defV = 0.0f;
+    }
 }
 
 std::vector<Module*> RigEngine::allModules() const
 {
     std::vector<Module*> v;
-    for (auto* m : monoChain) v.push_back (m);
-    for (auto* m : stereoChain) v.push_back (m);
+    for (auto* m : preMods) v.push_back (m);
+    v.push_back (const_cast<NamAmp*> (&amp));
+    v.push_back (const_cast<CabIR*> (&cab));
+    for (auto* m : postMods) v.push_back (m);
     return v;
 }
 
@@ -40,6 +42,9 @@ void RigEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
     sampleRate.store (sr);
     bufferSize.store (device->getCurrentBufferSizeSamples());
     driverLatency.store (device->getInputLatencyInSamples() + device->getOutputLatencyInSamples());
+    lastOrderCode = preOrder.load() ^ (postOrder.load() << 16);
+    fadeInTotal = std::max (1, (int) (0.012 * sr));
+    fadeInLeft = 0;
     prepared = true;
 }
 
@@ -72,18 +77,26 @@ void RigEngine::audioDeviceIOCallbackWithContext (const float* const* in, int nu
 
         for (int i = 0; i < n; ++i) inPk = std::max (inPk, std::abs (mono[(size_t) i]));
 
-        for (auto* m : monoChain) m->run (mono.data(), n);
+        const uint32_t pre = preOrder.load (std::memory_order_relaxed), post = postOrder.load (std::memory_order_relaxed);
+        const uint32_t code = pre ^ (post << 16);
+        if (code != lastOrderCode) { lastOrderCode = code; fadeInLeft = fadeInTotal; }   // ordine cambiato: fade-in di 12 ms anti-click
+
+        for (int k = 0; k < kPre; ++k) preMods[(pre >> (4 * k)) & 0xF]->run (mono.data(), n);
+        amp.run (mono.data(), n);
+        cab.run (mono.data(), n);
 
         std::copy (mono.begin(), mono.begin() + n, left.begin());
         std::copy (mono.begin(), mono.begin() + n, right.begin());
-        for (auto* m : stereoChain) m->run (left.data(), right.data(), n);
+        for (int k = 0; k < kPost; ++k) postMods[(post >> (4 * k)) & 0xF]->run (left.data(), right.data(), n);
 
         for (int i = 0; i < n; ++i)
         {
             // limitatore di sicurezza: morbido sopra 0.9, mai oltre 1.0
             auto lim = [] (float v) { const float a = std::abs (v); if (a < 0.9f) return v; const float s = v < 0 ? -1.0f : 1.0f; return s * (0.9f + 0.1f * std::tanh ((a - 0.9f) / 0.1f)); };
-            left[(size_t) i]  = lim (left[(size_t) i]  * mst);
-            right[(size_t) i] = lim (right[(size_t) i] * mst);
+            float g = mst;
+            if (fadeInLeft > 0) { const float t = 1.0f - (float) fadeInLeft / (float) fadeInTotal; g *= t * t; --fadeInLeft; }
+            left[(size_t) i]  = lim (left[(size_t) i]  * g);
+            right[(size_t) i] = lim (right[(size_t) i] * g);
             outPk = std::max (outPk, std::max (std::abs (left[(size_t) i]), std::abs (right[(size_t) i])));
         }
 
@@ -122,6 +135,9 @@ std::unique_ptr<juce::XmlElement> RigEngine::saveState() const
     for (auto* m : allModules())
         for (auto& p : m->params) xml->setAttribute (m->moduleId + "." + p->id, (double) p->get());
     xml->setAttribute ("namPath", amp.getModelPath());
+    xml->setAttribute ("pedalPath", pedal.getModelPath());
+    xml->setAttribute ("preOrder", (int) preOrder.load());
+    xml->setAttribute ("postOrder", (int) postOrder.load());
     xml->setAttribute ("irPath", cab.getIRPath());
     return xml;
 }
@@ -137,13 +153,27 @@ void RigEngine::loadState (const juce::XmlElement& xml)
             const auto key = m->moduleId + "." + p->id;
             if (xml.hasAttribute (key)) p->set ((float) xml.getDoubleAttribute (key));
         }
-    juce::File nam (xml.getStringAttribute ("namPath")), ir (xml.getStringAttribute ("irPath"));
+    if (xml.hasAttribute ("preOrder"))  preOrder.store ((uint32_t) xml.getIntAttribute ("preOrder"));
+    if (xml.hasAttribute ("postOrder")) postOrder.store ((uint32_t) xml.getIntAttribute ("postOrder"));
+    sanitizeOrders();
+    juce::File nam (xml.getStringAttribute ("namPath")), ir (xml.getStringAttribute ("irPath")), ped (xml.getStringAttribute ("pedalPath"));
     if (nam.existsAsFile()) amp.loadModelAsync (nam);
+    if (ped.existsAsFile()) pedal.loadModelAsync (ped);
     if (ir.existsAsFile()) cab.loadIR (ir);
+}
+
+// Una permutazione non valida (file di preset vecchio o corrotto) ripristina l'ordine di default.
+void RigEngine::sanitizeOrders()
+{
+    auto valid = [] (const std::vector<int>& o, int n) { std::vector<int> s (o); std::sort (s.begin(), s.end()); for (int i = 0; i < n; ++i) if (s[(size_t) i] != i) return false; return (int) o.size() == n; };
+    if (! valid (getPreOrder(), kPre))   setPreOrder ({ 0, 2, 3, 1 });
+    if (! valid (getPostOrder(), kPost)) setPostOrder ({ 0, 1 });
 }
 
 void RigEngine::resetAll()
 {
+    setPreOrder ({ 0, 2, 3, 1 });
+    setPostOrder ({ 0, 1 });
     for (auto& p : globals.params) p->reset();
     for (auto* m : allModules()) for (auto& p : m->params) p->reset();
 }

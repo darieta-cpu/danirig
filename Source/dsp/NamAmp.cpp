@@ -114,6 +114,7 @@ struct NamAmp::Impl
     double devRate = 48000;
     int maxBlock = 512;
     bool prepared = false;
+    bool hasEq = true;
 
     // thread audio
     Loaded* current = nullptr;
@@ -133,12 +134,17 @@ struct NamAmp::Impl
     juce::ThreadPool pool { 1 };   // ultimo membro: distrutto per primo
 };
 
-NamAmp::NamAmp() : MonoModule ("amp", "NAM AMP"), impl (std::make_unique<Impl> (*this))
+NamAmp::NamAmp (const juce::String& id, const juce::String& titleText, bool withEq)
+    : MonoModule (id, titleText), impl (std::make_unique<Impl> (*this))
 {
+    impl->hasEq = withEq;
     inputDb   = &addFloat ("gain",   "Gain",   -12.0f, 24.0f, 0.0f, " dB", 1);
-    bass      = &addFloat ("bass",   "Bass",   -12.0f, 12.0f, 0.0f, " dB", 1);
-    mid       = &addFloat ("mid",    "Mid",    -12.0f, 12.0f, 0.0f, " dB", 1);
-    treble    = &addFloat ("treble", "Treble", -12.0f, 12.0f, 0.0f, " dB", 1);
+    if (withEq)
+    {
+        bass   = &addFloat ("bass",   "Bass",   -12.0f, 12.0f, 0.0f, " dB", 1);
+        mid    = &addFloat ("mid",    "Mid",    -12.0f, 12.0f, 0.0f, " dB", 1);
+        treble = &addFloat ("treble", "Treble", -12.0f, 12.0f, 0.0f, " dB", 1);
+    }
     outputDb  = &addFloat ("output", "Output", -24.0f, 12.0f, 0.0f, " dB", 1);
     normalize = &addToggle ("norm", "Normalize", true);
     quality   = &addChoice ("quality", "A2 Size", { "Full", "Lite" }, 0);
@@ -189,10 +195,13 @@ void NamAmp::process (float* x, int n)
     }
     if (I.current == nullptr) return;       // nessun modello: passa il segnale invariato
 
-    const float bT = bass->get(), mT = mid->get(), tT = treble->get();
-    if (bT != I.lastBass)   { I.eqLow.setLowShelf (I.devRate, 110.0, bT);        I.lastBass = bT; }
-    if (mT != I.lastMid)    { I.eqMid.setPeak (I.devRate, 750.0, 0.8, mT);       I.lastMid = mT; }
-    if (tT != I.lastTreble) { I.eqHigh.setHighShelf (I.devRate, 3200.0, tT);     I.lastTreble = tT; }
+    if (I.hasEq)
+    {
+        const float bT = bass->get(), mT = mid->get(), tT = treble->get();
+        if (bT != I.lastBass)   { I.eqLow.setLowShelf (I.devRate, 110.0, bT);        I.lastBass = bT; }
+        if (mT != I.lastMid)    { I.eqMid.setPeak (I.devRate, 750.0, 0.8, mT);       I.lastMid = mT; }
+        if (tT != I.lastTreble) { I.eqHigh.setHighShelf (I.devRate, 3200.0, tT);     I.lastTreble = tT; }
+    }
 
     const float inT = dbToGain (inputDb->get());
     float outDb = outputDb->get();
@@ -220,7 +229,7 @@ void NamAmp::process (float* x, int n)
     for (int i = 0; i < n; ++i)
     {
         I.outGain += (outT - I.outGain) * 0.002f;
-        x[i] = I.eqHigh.process (I.eqMid.process (I.eqLow.process (x[i]))) * I.outGain;
+        x[i] = (I.hasEq ? I.eqHigh.process (I.eqMid.process (I.eqLow.process (x[i]))) : x[i]) * I.outGain;
     }
 }
 } // namespace dr

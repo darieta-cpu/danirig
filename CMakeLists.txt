@@ -16,6 +16,17 @@ endif()
 option(DANIRIG_BUILD_TESTS "Compila i test DSP (console)" OFF)
 set(ASIO_SDK_DIR "" CACHE PATH "Cartella dell'SDK ASIO di Steinberg (solo Windows, opzionale)")
 
+# ASIO: se l'SDK Steinberg è estratto in third_party/ (es. third_party/asiosdk), viene trovato da solo.
+if(WIN32 AND NOT ASIO_SDK_DIR)
+    file(GLOB _asio_headers "${CMAKE_CURRENT_SOURCE_DIR}/third_party/*/common/iasiodrv.h")
+    if(_asio_headers)
+        list(GET _asio_headers 0 _asio_h)
+        get_filename_component(_asio_common "${_asio_h}" DIRECTORY)
+        get_filename_component(_asio_root "${_asio_common}" DIRECTORY)
+        set(ASIO_SDK_DIR "${_asio_root}" CACHE PATH "" FORCE)
+    endif()
+endif()
+
 include(FetchContent)
 FetchContent_Declare(JUCE
     GIT_REPOSITORY https://github.com/juce-framework/JUCE.git
@@ -82,6 +93,8 @@ if(WIN32 AND ASIO_SDK_DIR)
     target_compile_definitions(DaniRig PRIVATE JUCE_ASIO=1)
     target_include_directories(DaniRig PRIVATE "${ASIO_SDK_DIR}/common")
     message(STATUS "ASIO abilitato (SDK: ${ASIO_SDK_DIR})")
+elseif(WIN32)
+    message(STATUS "ASIO NON abilitato: mancano gli header dell'SDK Steinberg (vedi README). Resta WASAPI.")
 endif()
 
 target_link_libraries(DaniRig PRIVATE

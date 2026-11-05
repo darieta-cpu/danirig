@@ -5,12 +5,13 @@ App **standalone** per chitarra live, Mac (universal: Apple Silicon + Intel) e W
 **Catena del segnale** (ogni blocco è un modulo con on/off, parametri e crossfade senza click):
 
 ```
-Ingresso → Noise Gate → Overdrive (stile TS) → Distortion (stile DS-1) → Ampli NAM (A2) → Cabinet IR → Delay (tap) → Reverb → Uscita
+Ingresso → Noise Gate → Overdrive (stile TS) → Distortion (stile DS-1) → **Pedale NAM** → Ampli NAM (A2) → Cabinet IR → Delay (tap) → Reverb → Uscita
 ```
 
 | Modulo | Cosa fa |
 |---|---|
 | **Noise Gate** | Gate senza lookahead (zero latenza), soglia/release/range, isteresi e hold |
+| **NAM Pedal** | Un secondo caricatore NAM, **davanti all'ampli**, per il profilo di un pedale reale (overdrive, boost, fuzz...). Gain/Output, auto-level, A2 Full/Lite, precedente/successivo nella cartella. Parte spento |
 | **Overdrive** | Modello analogico di uno stadio op-amp con diodi nel feedback + gobba sui medi, oversampling 4x |
 | **Distortion** | Booster a transistor + op-amp ad alto gain + clipping duro a diodi + tone "scoop", oversampling 4x |
 | **NAM Amp** | Carica `.nam` (A1 e **A2**, con selettore Full/Lite per i modelli A2), EQ a 3 bande, auto-level, caricamento in background con crossfade tra modelli, precedente/successivo nella cartella |
@@ -18,7 +19,9 @@ Ingresso → Noise Gate → Overdrive (stile TS) → Distortion (stile DS-1) →
 | **Delay** | Tap tempo, suddivisioni (1/4, 1/8 puntato, 1/8, terzina), repeats, tone, mod, modo Digital/Analog, ping-pong |
 | **Reverb** | FDN a 8 linee con diffusione, damping, pre-delay, low cut, leggera modulazione |
 
-Le impostazioni (e il percorso di modello/IR) vengono salvate all'uscita e ripristinate all'avvio. `SAVE`/`LOAD` salvano/caricano preset `.dprig`.
+**Riordinare i moduli**: trascina un pedale dalla fascia alta del pannello (dove c'è la maniglia a puntini). Si riordinano liberamente i moduli *prima dell'ampli* (Gate, NAM Pedal, Overdrive, Distortion) e quelli *dopo il cab* (Delay, Reverb). Ampli e cabinet restano al loro posto. Lo schema "SIGNAL CHAIN" mostra l'ordine reale; quando cambi ordine c'è un fade-in di 12 ms per evitare click.
+
+Le impostazioni (e l'ordine dei moduli, i percorsi di modelli e IR) vengono salvate all'uscita e ripristinate all'avvio. `SAVE`/`LOAD` salvano/caricano preset `.dprig`.
 
 ## Build in locale (Mac o Windows)
 
@@ -46,7 +49,7 @@ e lancia anche i test DSP su Linux. Gli artefatti si scaricano dalla pagina dell
 
 - **Buffer 64–128 campioni a 48 kHz** (parte da 128 @ 48 kHz). La finestra mostra buffer, latenza dichiarata dal driver e latenza aggiunta dall'elaborazione interna.
 - **48 kHz** è il rate nativo di quasi tutti i profili NAM: se il device lavora a un altro rate, il modello gira ricampionato (resampler corto, ~0.3 ms) e viene aggiunto circa un buffer di latenza. Per la latenza minima usa 48 kHz.
-- **Windows**: usa un driver **ASIO** (quello della tua interfaccia, oppure ASIO4ALL/FlexASIO). Per compilare con ASIO serve l'SDK Steinberg (non ridistribuibile): `-DASIO_SDK_DIR=<cartella dell'SDK>`. Senza ASIO restano disponibili WASAPI (anche in modalità low-latency) e DirectSound.
+- **Windows e ASIO**: per la latenza minima serve ASIO, ma JUCE può usarlo solo se compilato con l'SDK Steinberg. Scarica l'SDK dal sito sviluppatori Steinberg, estrailo in `third_party/asiosdk/` (deve esistere `third_party/asiosdk/common/iasiodrv.h`) e rifai la build: il CMake lo trova da solo (oppure `-DASIO_SDK_DIR=<cartella>`). Dall'ottobre 2025 l'SDK è con doppia licenza (GPLv3 oppure licenza proprietaria Steinberg, gratuita): per uso personale non cambia nulla, se distribuisci l'app ad altri leggi i termini. Senza ASIO restano WASAPI Exclusive e Low Latency, che JUCE offre tra i tipi di device.
 - **Mac**: CoreAudio va benissimo con interfacce class-compliant; scegli la tua interfaccia come ingresso *e* uscita (evita aggregate device).
 - Evita di usare il microfono interno come ingresso: con le casse si innesca il feedback.
 - Il modello A2 **Lite** costa molto meno CPU del Full.
