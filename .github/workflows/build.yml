@@ -77,4 +77,14 @@ jobs:
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDANIRIG_BUILD_TESTS=ON
           cmake --build build --target DaniRigTests -j $(nproc)
       - name: Esegui i test
-        run: find build -name DaniRigTests -type f -perm -u+x | head -n 1 | xargs -I{} {}
+        run: |
+          TEST=$(find build -name DaniRigTests -type f | head -n 1)
+          if [ -z "$TEST" ]; then
+            echo "Eseguibile dei test non trovato. Contenuto di build:"
+            find build -maxdepth 3 -not -path "*/_deps/*" | head -n 60
+            exit 1
+          fi
+          MODEL=$(find build/_deps -name A2.nam | head -n 1)
+          echo "Eseguo: $TEST $MODEL"
+          chmod +x "$TEST"
+          "$TEST" $MODEL
