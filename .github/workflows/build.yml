@@ -8,7 +8,7 @@ on:
 
 jobs:
   macos:
-    name: macOS (universal arm64 + x86_64)
+    name: macOS universal - app, VST3, AU
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,32 +16,56 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
-      - name: Build
-        run: cmake --build build --config Release --target DaniRig -j $(sysctl -n hw.ncpu)
+      - name: Build (app standalone + VST3 + AU)
+        run: cmake --build build --config Release --target DaniRig DaniRigPlugin_VST3 DaniRigPlugin_AU -j $(sysctl -n hw.ncpu)
 
-      - name: Trova l'app e verifica che sia universale
+      - name: Trova i bundle e verifica che siano universali
         run: |
           APP=$(find build -name "DaniRig.app" -maxdepth 4 | head -n 1)
-          echo "APP=$APP" >> "$GITHUB_ENV"
-          lipo -info "$APP/Contents/MacOS/DaniRig"
+          VST3=$(find build -name "DaniRig.vst3" -maxdepth 6 | head -n 1)
+          AU=$(find build -name "DaniRig.component" -maxdepth 6 | head -n 1)
+          echo "APP=$APP" >> "$GITHUB_ENV"; echo "VST3=$VST3" >> "$GITHUB_ENV"; echo "AU=$AU" >> "$GITHUB_ENV"
+          for b in "$APP/Contents/MacOS/DaniRig" "$VST3/Contents/MacOS/DaniRig" "$AU/Contents/MacOS/DaniRig"; do
+            echo "== $b"; lipo -info "$b"
+          done
 
-      - name: Firma ad-hoc (necessaria per far partire il binario arm64)
-        run: codesign --force --deep --sign - "$APP"
-
-      - name: Crea il DMG
+      - name: Firma ad-hoc (necessaria per far partire i binari arm64)
         run: |
-          mkdir -p dist/dmg
+          codesign --force --deep --sign - "$APP"
+          codesign --force --deep --sign - "$VST3"
+          codesign --force --deep --sign - "$AU"
+
+      - name: Validazione AU (informativa)
+        continue-on-error: true
+        run: |
+          mkdir -p "$HOME/Library/Audio/Plug-Ins/Components"
+          cp -R "$AU" "$HOME/Library/Audio/Plug-Ins/Components/"
+          killall -9 AudioComponentRegistrar 2>/dev/null || true
+          auval -v aufx Drig Dnar
+
+      - name: Crea DMG e pacchetto plugin
+        run: |
+          mkdir -p dist/dmg dist/plugins
           cp -R "$APP" dist/dmg/
           ln -s /Applications dist/dmg/Applications
           hdiutil create -volname "DaniRig" -srcfolder dist/dmg -ov -format UDZO dist/DaniRig-macOS-universal.dmg
+          cp -R "$VST3" "$AU" dist/plugins/
+          cp installer/install-plugins-mac.command dist/plugins/
+          chmod +x dist/plugins/install-plugins-mac.command
+          (cd dist && ditto -c -k --keepParent plugins DaniRig-Plugins-macOS-universal.zip)
 
       - uses: actions/upload-artifact@v4
         with:
           name: DaniRig-macOS-universal
           path: dist/DaniRig-macOS-universal.dmg
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DaniRig-Plugins-macOS-VST3-AU
+          path: dist/DaniRig-Plugins-macOS-universal.zip
+
   windows:
-    name: Windows (x64, installer .exe)
+    name: Windows x64 - app, VST3, installer
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -49,21 +73,29 @@ jobs:
       - name: Configure (runtime MSVC statico, nessun redistributable da installare)
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
-      - name: Build
-        run: cmake --build build --config Release --target DaniRig --parallel
+      - name: Build (app standalone + VST3)
+        run: cmake --build build --config Release --target DaniRig DaniRigPlugin_VST3 --parallel
 
-      - name: Installer Inno Setup
+      - name: Installer Inno Setup (app + plugin VST3)
         shell: pwsh
         run: |
           choco install innosetup -y --no-progress
-          $exe = (Get-ChildItem -Path build -Recurse -Filter DaniRig.exe | Select-Object -First 1).FullName
-          Write-Host "EXE: $exe"
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DExePath=$exe" "/DAppVersion=0.1.0" installer\DaniRig.iss
+          $exe  = (Get-ChildItem -Path build -Recurse -Filter DaniRig.exe | Select-Object -First 1).FullName
+          $vst3 = (Get-ChildItem -Path build -Recurse -Directory -Filter DaniRig.vst3 | Select-Object -First 1).FullName
+          Write-Host "EXE:  $exe"
+          Write-Host "VST3: $vst3"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DExePath=$exe" "/DVst3Dir=$vst3" "/DAppVersion=0.1.0" installer\DaniRig.iss
+          Compress-Archive -Path $vst3 -DestinationPath DaniRig-VST3-Windows.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: DaniRig-Windows-Setup
           path: installer/Output/DaniRig-Setup-*.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DaniRig-VST3-Windows
+          path: DaniRig-VST3-Windows.zip
 
   tests:
     name: Test DSP (Linux)
