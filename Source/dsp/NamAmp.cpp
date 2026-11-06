@@ -6,11 +6,39 @@
 #include <NAM/get_dsp.h>
 #include <NAM/dsp.h>
 #include <NAM/slimmable.h>
+#include <NAM/model_config.h>
+#include <NAM/container.h>
+#include <NAM/convnet.h>
+#include <NAM/linear.h>
+#include <NAM/lstm.h>
+#include <NAM/sequential.h>
+#include <NAM/wavenet/model.h>
+#include <mutex>
 
 namespace dr
 {
 namespace
 {
+// Il core NAM registra le architetture (WaveNet, LSTM, ConvNet, ...) con oggetti statici dentro ai singoli .cpp.
+// Quando il core finisce in una libreria statica (come nei plugin JUCE) il linker scarta i .cpp che nessuno
+// referenzia e le architetture spariscono ("No config parser registered for architecture ...").
+// Referenziare qui create_config() obbliga il linker a tenerli e ci permette di registrare ciò che manca.
+void ensureNamArchitecturesRegistered()
+{
+    static std::once_flag once;
+    std::call_once (once, []
+    {
+        auto& reg = nam::ConfigParserRegistry::instance();
+        auto add = [&reg] (const char* name, nam::ConfigParserFunction fn) { if (! reg.has (name)) reg.registerParser (name, std::move (fn)); };
+        add ("WaveNet",            nam::wavenet::create_config);
+        add ("LSTM",               nam::lstm::create_config);
+        add ("ConvNet",            nam::convnet::create_config);
+        add ("Linear",             nam::linear::create_config);
+        add ("Sequential",         nam::sequential::create_config);
+        add ("SlimmableContainer", nam::container::create_config);
+    });
+}
+
 struct Loaded
 {
     std::unique_ptr<nam::DSP> dsp;
@@ -40,7 +68,7 @@ struct Loaded
 
 struct NamAmp::Impl
 {
-    explicit Impl (NamAmp& o) : owner (o) {}
+    explicit Impl (NamAmp& o) : owner (o) { ensureNamArchitecturesRegistered(); }
     ~Impl()
     {
         pool.removeAllJobs (true, 5000);

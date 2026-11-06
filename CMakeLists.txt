@@ -47,7 +47,12 @@ FetchContent_MakeAvailable(JUCE nam_src)
 file(GLOB NAM_SOURCES "${nam_src_SOURCE_DIR}/NAM/*.cpp" "${nam_src_SOURCE_DIR}/NAM/*/*.cpp")
 # OBJECT (non STATIC): il core NAM registra le architetture con inizializzatori statici,
 # che il linker scarterebbe da una libreria statica.
-add_library(nam_core OBJECT ${NAM_SOURCES})
+option(DANIRIG_NAM_AS_STATIC "Solo diagnostica: core NAM come libreria statica (riproduce il caso dei plugin)" OFF)
+if(DANIRIG_NAM_AS_STATIC)
+    add_library(nam_core STATIC ${NAM_SOURCES})
+else()
+    add_library(nam_core OBJECT ${NAM_SOURCES})
+endif()
 target_include_directories(nam_core PUBLIC
     "${nam_src_SOURCE_DIR}"
     "${nam_src_SOURCE_DIR}/Dependencies/nlohmann")
