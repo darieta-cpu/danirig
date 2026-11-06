@@ -22,8 +22,8 @@ public:
             setContentOwned (new dr::MainComponent(), true);
             setResizable (true, true);
             setResizeLimits (640, 380, 3000, 1800);
-            if (auto* c = getConstrainer()) c->setFixedAspectRatio (1280.0 / 760.0);
-            centreWithSize (1280, 760);
+            if (auto* c = getConstrainer()) c->setFixedAspectRatio (1280.0 / 800.0);
+            centreWithSize (1280, 800);
             setVisible (true);
         }
         void closeButtonPressed() override { juce::JUCEApplication::getInstance()->systemRequestedQuit(); }

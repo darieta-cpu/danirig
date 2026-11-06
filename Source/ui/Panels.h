@@ -264,6 +264,52 @@ public:
 };
 
 // ---------------------------------------------------------------------------------------------
+// Pedale multi-modulazione (Phase / Chorus / Tremolo) con tap tempo
+class MultiModPanel : public PanelBase
+{
+public:
+    explicit MultiModPanel (MultiMod& m)
+        : PanelBase (m, Look::Stomp, juce::Colour (0xff1f7f86), juce::Colours::white, juce::Colour (0xff12272a), juce::Colours::white), mm (m)
+    {
+        for (const char* id : { "rate", "depth", "level" }) addKnob (*m.find (id));
+        modeBox = addChoice (*m.find ("mode"));
+        divBox  = addChoice (*m.find ("div"));
+        tap.setButtonText ("TAP");
+        tap.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff0f1c1e));
+        tap.onClick = [this] { mm.tap(); for (auto& k : knobs) k->refresh(); };
+        addAndMakeVisible (tap);
+    }
+
+    void resized() override
+    {
+        auto r = getLocalBounds().reduced (12, 10);
+        r.removeFromTop (26);
+        std::vector<Knob*> ks; for (auto& k : knobs) ks.push_back (k.get());
+        rowOfKnobs (r.removeFromTop (84), ks);
+        auto row = r.removeFromTop (30);
+        modeBox->setBounds (row.removeFromLeft (104));
+        row.removeFromLeft (6);
+        divBox->setBounds (row.removeFromLeft (100));
+        const int w = getWidth(), h = getHeight();
+        titleArea = juce::Rectangle<int> (12, h - 62, 118, 34);
+        tap.setBounds (w - 110, h - 56, 50, 34);
+        footswitch.setBounds (juce::Rectangle<int> (44, 44).withCentre ({ w - 30, h - 34 }));
+    }
+
+    void paintTitle (juce::Graphics& g, juce::Rectangle<int> a) override
+    {
+        g.setColour (textCol);
+        g.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold | juce::Font::italic)));
+        g.drawText (module.title, a, juce::Justification::centredLeft);
+    }
+
+private:
+    MultiMod& mm;
+    ChoiceBox *modeBox, *divBox;
+    juce::TextButton tap;
+};
+
+// ---------------------------------------------------------------------------------------------
 // Pedale "NAM": carica il profilo NAM di un pedale (overdrive, boost, fuzz...) da mettere davanti all'ampli.
 class NamPedalPanel : public PanelBase
 {
@@ -509,29 +555,27 @@ public:
 };
 
 // ---------------------------------------------------------------------------------------------
-// Schema del segnale (segue l'ordine reale dei moduli) + stato audio
+// Striscia con lo schema del segnale (segue l'ordine reale dei moduli) + stato audio
 class FlowPanel : public juce::Component
 {
 public:
     explicit FlowPanel (RigEngine& e) : engine (e) {}
     float cpu = 0.0f;
+    bool showDriverInfo = true;
 
     void paint (juce::Graphics& g) override
     {
         auto r = getLocalBounds().toFloat().reduced (1.0f);
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xff191c20), 0, r.getY(), juce::Colour (0xff0e1012), 0, r.getBottom(), false));
-        g.fillRoundedRectangle (r, 10.0f);
-        g.setColour (juce::Colour (0xff30343a)); g.drawRoundedRectangle (r, 10.0f, 1.5f);
-
-        g.setColour (col::gold); g.setFont (uiFont (13.0f, true));
-        g.drawText ("SIGNAL CHAIN", 16, 10, 200, 18, juce::Justification::centredLeft);
+        g.fillRoundedRectangle (r, 8.0f);
+        g.setColour (juce::Colour (0xff30343a)); g.drawRoundedRectangle (r, 8.0f, 1.2f);
 
         struct Node { juce::String label; bool active; };
         std::vector<Node> nodes { { "IN", true } };
-        auto shortName = [] (const juce::String& id)
+        auto shortName = [] (const juce::String& id) -> juce::String
         {
-            if (id == "gate") return "GATE"; if (id == "nampedal") return "NAM P"; if (id == "od") return "OD"; if (id == "dist") return "DIST";
-            if (id == "amp") return "AMP"; if (id == "cab") return "CAB"; if (id == "delay") return "DLY"; return "REV";
+            if (id == "gate") return "GATE"; if (id == "nampedal") return "NAM P"; if (id == "od") return "OD";
+            if (id == "dist") return "DIST"; if (id == "mod") return "MOD"; if (id == "delay") return "DLY"; return "REV";
         };
         for (int k : engine.getPreOrder())  nodes.push_back ({ shortName (engine.preMods[k]->moduleId),  engine.preMods[k]->isActive() });
         nodes.push_back ({ "AMP", engine.amp.isActive() });
@@ -539,13 +583,12 @@ public:
         for (int k : engine.getPostOrder()) nodes.push_back ({ shortName (engine.postMods[k]->moduleId), engine.postMods[k]->isActive() });
         nodes.push_back ({ "OUT", true });
 
-        float x = 16.0f, y = 36.0f;
-        const float maxX = (float) getWidth() - 14.0f, h = 22.0f;
+        float x = 14.0f;
+        const float y = r.getY() + 6.0f, h = 24.0f;
         g.setFont (uiFont (11.0f, true));
         for (auto& n : nodes)
         {
             const float w = 16.0f + 6.6f * (float) n.label.length();
-            if (x + w > maxX) { x = 16.0f; y += h + 6.0f; }
             auto box = juce::Rectangle<float> (x, y, w, h);
             g.setColour (n.active ? juce::Colour (0xff2a3a2e) : juce::Colour (0xff202226));
             g.fillRoundedRectangle (box, 5.0f);
@@ -557,25 +600,17 @@ public:
         }
 
         const double sr = engine.sampleRate.load();
+        auto text = getLocalBounds().toFloat().withTrimmedLeft (x + 10.0f).reduced (8.0f, 0);
+        g.setFont (uiFont (12.0f));
+        if (sr <= 0) { g.setColour (juce::Colours::orange); g.drawText ("Nessun device audio: apri Audio Settings", text, juce::Justification::centredRight); return; }
         const int buf = engine.bufferSize.load();
-        const int drv = engine.driverLatency.load(), chain = engine.chainLatency.load();
-        auto text = r.reduced (16.0f, 0).withTrimmedTop (y + h + 14.0f);
-        g.setFont (uiFont (12.0f)); g.setColour (col::text);
-        if (sr > 0)
-        {
-            const double msBuf = 1000.0 * buf / sr, msDrv = 1000.0 * drv / sr, msChain = 1000.0 * chain / sr;
-            g.drawText (juce::String (sr / 1000.0, 1) + " kHz  -  buffer " + juce::String (buf) + " (" + juce::String (msBuf, 1) + " ms)",
-                        text.removeFromTop (18), juce::Justification::centredLeft);
-            g.setColour (col::dim);
-            g.drawText ("Driver in+out: " + juce::String (msDrv, 1) + " ms  -  DSP: +" + juce::String (msChain, 2) + " ms",
-                        text.removeFromTop (18), juce::Justification::centredLeft);
-            g.drawText ("CPU audio: " + juce::String (juce::roundToInt (cpu * 100.0f)) + " %", text.removeFromTop (18), juce::Justification::centredLeft);
-        }
-        else
-        {
-            g.setColour (juce::Colours::orange);
-            g.drawText ("Nessun device audio: apri Audio Settings", text.removeFromTop (18), juce::Justification::centredLeft);
-        }
+        const double msBuf = 1000.0 * buf / sr, msDrv = 1000.0 * engine.driverLatency.load() / sr, msChain = 1000.0 * engine.chainLatency.load() / sr;
+        juce::String t = juce::String (sr / 1000.0, 1) + " kHz  -  buffer " + juce::String (buf) + " (" + juce::String (msBuf, 1) + " ms)";
+        if (showDriverInfo) t += "  -  driver " + juce::String (msDrv, 1) + " ms";
+        t += "  -  DSP +" + juce::String (msChain, 2) + " ms";
+        if (showDriverInfo) t += "  -  CPU " + juce::String (juce::roundToInt (cpu * 100.0f)) + " %";
+        g.setColour (col::dim);
+        g.drawText (t, text, juce::Justification::centredRight);
     }
 private:
     RigEngine& engine;

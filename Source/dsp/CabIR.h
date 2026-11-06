@@ -32,17 +32,19 @@ public:
     void loadIR (const juce::File& f)
     {
         irPath = f.getFullPathName();
+        irRequested.store (true);
         conv.loadImpulseResponse (f, juce::dsp::Convolution::Stereo::no, juce::dsp::Convolution::Trim::yes, 0,
                                   juce::dsp::Convolution::Normalise::yes);
     }
-    void clearIR() { irPath = {}; conv.loadImpulseResponse (juce::AudioBuffer<float> (1, 1), sr > 0 ? sr : 48000.0,
-                         juce::dsp::Convolution::Stereo::no, juce::dsp::Convolution::Trim::no, juce::dsp::Convolution::Normalise::no); }
+    void clearIR() { irPath = {}; irRequested.store (false); }
     juce::String getIRPath() const { return irPath; }
     bool hasIR() const { return conv.getCurrentIRSize() > 1; }
 
     void process (float* x, int n) override
     {
-        if (hasIR())
+        // NB: la convolution di JUCE installa un nuovo IR dentro process() (thread audio). Va quindi chiamata
+        // finché un IR è stato richiesto, senza aspettare che getCurrentIRSize() sia > 0, altrimenti non si carica mai.
+        if (irRequested.load())
         {
             float* ch[1] = { x };
             juce::dsp::AudioBlock<float> block (ch, 1, (size_t) n);
@@ -64,6 +66,7 @@ private:
     Param *lowCut, *highCut, *level;
     juce::dsp::Convolution conv;
     juce::String irPath;
+    std::atomic<bool> irRequested { false };
     Biquad hp, lp;
     double sr = 48000;
     float lastLow = -1, lastHigh = -1, gain = 1;

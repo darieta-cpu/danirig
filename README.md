@@ -5,12 +5,13 @@ App **standalone** per chitarra live, Mac (universal: Apple Silicon + Intel) e W
 **Catena del segnale** (ogni blocco è un modulo con on/off, parametri e crossfade senza click):
 
 ```
-Ingresso → Noise Gate → Overdrive (stile TS) → Distortion (stile DS-1) → **Pedale NAM** → Ampli NAM (A2) → Cabinet IR → Delay (tap) → Reverb → Uscita
+Ingresso → Noise Gate → **Multi Mod** → Overdrive (stile TS) → Distortion (stile DS-1) → **Pedale NAM** → Ampli NAM (A2) → Cabinet IR → Delay (tap) → Reverb → Uscita
 ```
 
 | Modulo | Cosa fa |
 |---|---|
 | **Noise Gate** | Gate senza lookahead (zero latenza), soglia/release/range, isteresi e hold |
+| **Multi Mod** | Pedale multi-modulazione in stile TC Plethora X1 con tre modi: **Phase** (4 stadi allpass, stile Phase 90), **Chorus** (BBD mono, stile CE-2), **Tremolo**. Rate, Depth, Level e **tap tempo** con suddivisione (1/2, 1/4, 1/8 puntato, 1/8, 1/16): il tap imposta la frequenza dell'LFO e ne riallinea la fase. Parte spento |
 | **NAM Pedal** | Un secondo caricatore NAM, **davanti all'ampli**, per il profilo di un pedale reale (overdrive, boost, fuzz...). Gain/Output, auto-level, A2 Full/Lite, precedente/successivo nella cartella. Parte spento |
 | **Overdrive** | Modello analogico di uno stadio op-amp con diodi nel feedback + gobba sui medi, oversampling 4x |
 | **Distortion** | Booster a transistor + op-amp ad alto gain + clipping duro a diodi + tone "scoop", oversampling 4x |
@@ -19,9 +20,25 @@ Ingresso → Noise Gate → Overdrive (stile TS) → Distortion (stile DS-1) →
 | **Delay** | Tap tempo, suddivisioni (1/4, 1/8 puntato, 1/8, terzina), repeats, tone, mod, modo Digital/Analog, ping-pong |
 | **Reverb** | FDN a 8 linee con diffusione, damping, pre-delay, low cut, leggera modulazione |
 
-**Riordinare i moduli**: trascina un pedale dalla fascia alta del pannello (dove c'è la maniglia a puntini). Si riordinano liberamente i moduli *prima dell'ampli* (Gate, NAM Pedal, Overdrive, Distortion) e quelli *dopo il cab* (Delay, Reverb). Ampli e cabinet restano al loro posto. Lo schema "SIGNAL CHAIN" mostra l'ordine reale; quando cambi ordine c'è un fade-in di 12 ms per evitare click.
+**Riordinare i moduli**: trascina un pedale dalla fascia alta del pannello (dove c'è la maniglia a puntini). Si riordinano liberamente i moduli *prima dell'ampli* (Gate, Multi Mod, NAM Pedal, Overdrive, Distortion) e quelli *dopo il cab* (Delay, Reverb). Ampli e cabinet restano al loro posto. Lo schema "SIGNAL CHAIN" mostra l'ordine reale; quando cambi ordine c'è un fade-in di 12 ms per evitare click.
 
 Le impostazioni (e l'ordine dei moduli, i percorsi di modelli e IR) vengono salvate all'uscita e ripristinate all'avvio. `SAVE`/`LOAD` salvano/caricano preset `.dprig`.
+
+## Plugin (VST3 e AU)
+
+Oltre all'app, la build genera il rig come plugin, con la stessa interfaccia e lo stesso motore:
+
+| Sistema | Formati | Dove |
+|---|---|---|
+| macOS (universal) | **VST3** e **AU** | artefatto `DaniRig-Plugins-macOS-VST3-AU` (zip con `DaniRig.vst3`, `DaniRig.component` e `install-plugins-mac.command`) |
+| Windows (x64) | **VST3** | incluso nell'installer `DaniRig-Setup-*.exe` (componente opzionale, installato in `C:\Program Files\Common Files\VST3`) e come zip `DaniRig-VST3-Windows` |
+
+- **Mac**: estrai lo zip e fai doppio click su `install-plugins-mac.command` (copia i plugin in `~/Library/Audio/Plug-Ins/` e toglie la quarantena). In Reaper: *Options > Preferences > Plug-ins > VST* (o *AU*) > *Re-scan*.
+- **AU esiste solo su Mac**; il **VST2** non è più compilabile (Steinberg ha ritirato l'SDK), quindi il formato "VST" è il VST3.
+- Ingresso mono o stereo (con il menu *Input* si sceglie il canale della chitarra), uscita stereo.
+- Lo stato (parametri, ordine dei moduli, percorsi di modelli NAM e IR) viene salvato con il progetto della DAW.
+- In questa prima versione i parametri **non** sono esposti all'automazione della DAW: si regolano dall'interfaccia.
+- Nel plugin non c'è il pulsante *Audio Settings* (il device lo gestisce la DAW).
 
 ## Build in locale (Mac o Windows)
 
@@ -29,17 +46,19 @@ Servono CMake ≥ 3.22 e un compilatore C++20 (Xcode/Command Line Tools, oppure 
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release --target DaniRig
+cmake --build build --config Release --target DaniRig DaniRigPlugin_VST3            # + DaniRigPlugin_AU su Mac
 ```
 
-JUCE 9.0.5 e il core NAM vengono scaricati da soli (FetchContent). L'app esce in `build/DaniRig_artefacts/`.
+JUCE 9.0.5 e il core NAM vengono scaricati da soli (FetchContent). L'app esce in `build/DaniRig_artefacts/`, i plugin in `build/DaniRigPlugin_artefacts/`.
 
 ## Build con GitHub Actions (senza Xcode)
 
 Fai push del progetto su un repository GitHub: il workflow `.github/workflows/build.yml` produce
 
-- `DaniRig-macOS-universal.dmg` (arm64 + x86_64, firma ad-hoc)
-- `DaniRig-Setup-<versione>.exe` (installer Windows, runtime MSVC statico)
+- `DaniRig-macOS-universal.dmg` (app, arm64 + x86_64, firma ad-hoc)
+- `DaniRig-Plugins-macOS-universal.zip` (VST3 + AU universali con script di installazione)
+- `DaniRig-Setup-<versione>.exe` (installer Windows: app + plugin VST3, runtime MSVC statico)
+- `DaniRig-VST3-Windows.zip` (solo il plugin VST3)
 
 e lancia anche i test DSP su Linux. Gli artefatti si scaricano dalla pagina dell'esecuzione (tab *Actions*).
 
@@ -68,9 +87,11 @@ Verificano gate, stabilità dei pedali a tutti i livelli, resampler, tempi del d
 
 ```
 Source/
-  Main.cpp, MainComponent.*     finestra, barra superiore, audio settings, preset
+  Main.cpp, MainComponent.*     app standalone: finestra e device audio
+  plugin/                       PluginProcessor/Editor (VST3 e AU)
+  ui/RigUI.*                    interfaccia completa (condivisa da app e plugin)
   RigEngine.*                   callback audio e catena di moduli (mono → stereo)
-  dsp/                          NoiseGate, Pedals (TS + DS-1), NamAmp, CabIR, Delay, Reverb,
+  dsp/                          NoiseGate, MultiMod, Pedals (TS + DS-1), NamAmp, CabIR, Delay, Reverb,
                                 Resampler, FracDelay, Biquad, Module/Param
   ui/                           Controls (manopole, footswitch, meter), Panels (un pannello per modulo)
 installer/DaniRig.iss           installer Windows (Inno Setup)

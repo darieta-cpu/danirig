@@ -68,6 +68,8 @@ set_target_properties(nam_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set(DR_DSP_SOURCES
     Source/RigEngine.cpp
     Source/dsp/NamAmp.cpp)
+set(DR_UI_SOURCES
+    Source/ui/RigUI.cpp)
 
 juce_add_gui_app(DaniRig
     PRODUCT_NAME "DaniRig"
@@ -80,6 +82,7 @@ juce_add_gui_app(DaniRig
 target_sources(DaniRig PRIVATE
     Source/Main.cpp
     Source/MainComponent.cpp
+    ${DR_UI_SOURCES}
     ${DR_DSP_SOURCES})
 
 target_compile_definitions(DaniRig PRIVATE
@@ -100,6 +103,51 @@ endif()
 target_link_libraries(DaniRig PRIVATE
     nam_core
     juce::juce_audio_utils
+    juce::juce_dsp
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags)
+
+# ---------------------------------------------------------------------------------------------
+# Plugin: VST3 (Windows e Mac) + AU (solo Mac). VST2 non è più disponibile (SDK ritirato da Steinberg).
+if(APPLE)
+    set(DR_PLUGIN_FORMATS VST3 AU)
+else()
+    set(DR_PLUGIN_FORMATS VST3)
+endif()
+
+juce_add_plugin(DaniRigPlugin
+    PRODUCT_NAME "DaniRig"
+    COMPANY_NAME "DaniArieta"
+    PLUGIN_MANUFACTURER_CODE Dnar
+    PLUGIN_CODE Drig
+    FORMATS ${DR_PLUGIN_FORMATS}
+    VERSION ${PROJECT_VERSION}
+    BUNDLE_ID "com.daniarieta.danirig.plugin"
+    DESCRIPTION "NAM amp + IR cabinet + FX rig"
+    IS_SYNTH FALSE
+    NEEDS_MIDI_INPUT FALSE
+    NEEDS_MIDI_OUTPUT FALSE
+    IS_MIDI_EFFECT FALSE
+    COPY_PLUGIN_AFTER_BUILD FALSE
+    VST3_CATEGORIES Fx Distortion
+    AU_MAIN_TYPE kAudioUnitType_Effect)
+
+target_sources(DaniRigPlugin PRIVATE
+    Source/plugin/PluginProcessor.cpp
+    Source/plugin/PluginEditor.cpp
+    ${DR_UI_SOURCES}
+    ${DR_DSP_SOURCES})
+
+target_compile_definitions(DaniRigPlugin PUBLIC
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_VST3_CAN_REPLACE_VST2=0
+    JUCE_MODAL_LOOPS_PERMITTED=0)
+
+target_link_libraries(DaniRigPlugin PRIVATE
+    nam_core
+    juce::juce_audio_utils
+    juce::juce_audio_processors
     juce::juce_dsp
     juce::juce_recommended_config_flags
     juce::juce_recommended_lto_flags)

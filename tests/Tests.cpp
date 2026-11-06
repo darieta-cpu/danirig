@@ -6,8 +6,10 @@
 #include "dsp/Delay.h"
 #include "dsp/Reverb.h"
 #include "dsp/Resampler.h"
+#include "dsp/MultiMod.h"
 #include "RigEngine.h"
 #include <juce_events/juce_events.h>
+#include <juce_audio_formats/juce_audio_formats.h>
 #include <cstdio>
 #include <random>
 
@@ -171,18 +173,118 @@ int main (int argc, char** argv)
         else std::printf ("  (nessun modello passato: salto)\n");
     }
 
+    std::printf ("[Cabinet IR]\n");
+    {
+        // IR passa-basso (media mobile su 8 campioni): le alte frequenze devono scendere di molto DOPO il caricamento
+        const juce::File ir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("danirig_test_ir.wav");
+        ir.deleteFile();
+        {
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::FileOutputStream> os (ir.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), 48000.0, 1, 24, {}, 0));
+            if (w) { os.release(); juce::AudioBuffer<float> b (1, 64); b.clear(); for (int i = 0; i < 8; ++i) b.setSample (0, i, 0.125f); w->writeFromAudioSampleBuffer (b, 0, 64); }
+        }
+        CHECK (ir.existsAsFile() && ir.getSize() > 0, "file IR di prova creato");
+        auto gainAt = [&] (CabIR& c, double f)
+        {
+            auto x = sine (sr, f, 0.3, 19200);
+            for (size_t i = 0; i + block <= x.size(); i += block) c.run (x.data() + i, block);
+            return rms (x, 9600, 19000) / 0.2121f;
+        };
+        for (int variant = 0; variant < 2; ++variant)      // 0: IR caricato dopo prepare, 1: prima di prepare (come in un preset)
+        {
+            CabIR c;
+            c.find ("lowcut")->set (20.0f); c.find ("highcut")->set (20000.0f);
+            if (variant == 1) c.loadIR (ir);
+            c.prepare (sr, block);
+            if (variant == 0) c.loadIR (ir);
+            float hf = 1.0f;
+            for (int attempt = 0; attempt < 150; ++attempt)  // il caricamento è asincrono: si processa finché lo scambio avviene
+            {
+                hf = gainAt (c, 10000.0);
+                if (hf < 0.6f) break;
+                juce::Thread::sleep (20);
+            }
+            const float lf = gainAt (c, 200.0);
+            char msg[128]; std::snprintf (msg, sizeof msg, "IR %s prepare: 10 kHz %.2f, 200 Hz %.2f", variant ? "prima di" : "dopo", hf, lf);
+            std::printf ("       %s\n", msg);
+            CHECK (hf < 0.4f && lf > 0.05f && hf / lf < 0.35f, "l'IR viene caricato e filtra il segnale");
+        }
+        CabIR off; off.prepare (sr, block);
+        CHECK (std::abs (gainAt (off, 10000.0) - 1.0f) < 0.15f, "senza IR il cab lascia passare il segnale");
+        ir.deleteFile();
+    }
+
+    std::printf ("[Multi Mod: Phase / Chorus / Tremolo]\n");
+    {
+        MultiMod m; m.prepare (sr, block); m.enabled->set (1.0f);
+        auto run = [&] (std::vector<float>& x) { for (size_t i = 0; i + block <= x.size(); i += block) m.run (x.data() + i, block); };
+        // Tremolo 4 Hz, depth 10: l'inviluppo deve oscillare tra ~1 e ~0
+        m.find ("mode")->set (2.0f); m.find ("rate")->set (4.0f); m.find ("depth")->set (10.0f); m.reset();
+        auto x = sine (sr, 1000, 0.5, 48128); run (x);
+        float mn = 1e9f, mx = 0; for (size_t i = 12000; i + 240 <= 48000; i += 240) { const float r = rms (x, i, i + 240); mn = std::min (mn, r); mx = std::max (mx, r); }
+        std::printf ("       tremolo: inviluppo min %.3f max %.3f (ingresso rms 0.354)\n", mn, mx);
+        CHECK (mx > 0.30f && mn < 0.06f, "tremolo: modulazione profonda");
+        // Tremolo depth 0 = trasparente
+        m.find ("depth")->set (0.0f); m.reset(); auto t0 = sine (sr, 1000, 0.5, 24064); run (t0);
+        CHECK (std::abs (rms (t0, 12000, 24000) - 0.3536f) < 0.02f, "tremolo a depth 0: segnale invariato");
+        // Phase e Chorus: stabili e di livello sensato su rumore
+        for (int mode = 0; mode < 2; ++mode)
+        {
+            m.find ("mode")->set ((float) mode); m.find ("rate")->set (1.0f); m.find ("depth")->set (6.0f); m.reset();
+            std::mt19937 g (3); std::normal_distribution<float> nd (0.0f, 0.1f);
+            std::vector<float> n (96128); for (auto& v : n) v = nd (g);
+            auto dry = n; run (n);
+            const float r = rms (n, 48000, 96000) / rms (dry, 48000, 96000);
+            char msg[96]; std::snprintf (msg, sizeof msg, "%s: finito, guadagno su rumore %.2f", mode ? "chorus" : "phase", r);
+            CHECK (finite (n) && r > 0.4f && r < 1.3f, msg);
+            float diff = 0; for (size_t i = 48000; i < 96000; ++i) diff += std::abs (n[i] - dry[i]); 
+            CHECK (diff / 48000.0f > 0.005f, mode ? "chorus: modifica il segnale" : "phase: modifica il segnale");
+        }
+        // Tap tempo: 500 ms a 1/4 -> 2 Hz ; a 1/8 -> 4 Hz
+        MultiMod t; t.prepare (sr, block);
+        t.find ("div")->set (3.0f);
+        t.tap(); juce::Thread::sleep (500); t.tap(); juce::Thread::sleep (500); t.tap();
+        std::printf ("       tap 500 ms con 1/8 -> rate = %.2f Hz\n", t.find ("rate")->get());
+        CHECK (std::abs (t.find ("rate")->get() - 4.0f) < 0.4f, "tap tempo con suddivisione");
+    }
+
+    std::printf ("[Motore: process() condiviso da standalone e plugin]\n");
+    {
+        RigEngine e;
+        e.prepare (sr, block);
+        e.master->set (0.0f);
+        e.mod.enabled->set (1.0f); e.mod.find ("mode")->set (2.0f);
+        std::vector<float> in (block * 40), l (in.size()), r (in.size());
+        for (size_t i = 0; i < in.size(); ++i) in[i] = (float) (0.2 * std::sin (2 * kPi * 440.0 * (double) i / sr));
+        for (size_t i = 0; i + block <= in.size(); i += block)
+        {
+            const float* ins[1] = { in.data() + i }; float* outs[2] = { l.data() + i, r.data() + i };
+            e.process (ins, 1, outs, 2, block);
+        }
+        CHECK (finite (l) && finite (r) && rms (l, 2560, 5000) > 0.01f, "mono in -> stereo out con la catena di default");
+        // stesso buffer in/out (come nel plugin)
+        std::vector<float> a (in), b (in.size(), 0.0f);
+        for (size_t i = 0; i + block <= a.size(); i += block)
+        {
+            const float* ins[2] = { a.data() + i, b.data() + i }; float* outs[2] = { a.data() + i, b.data() + i };
+            e.process (ins, 2, outs, 2, block);
+        }
+        CHECK (finite (a) && rms (a, 2560, 5000) > 0.01f, "elaborazione in-place (plugin)");
+    }
+
     std::printf ("[Ordine moduli + pedale NAM]\n");
     {
         RigEngine e;
-        CHECK (RigEngine::unpack (RigEngine::pack ({ 2, 0, 3, 1 }), 4) == std::vector<int> ({ 2, 0, 3, 1 }), "pack/unpack dell'ordine");
-        CHECK (e.getPreOrder() == std::vector<int> ({ 0, 2, 3, 1 }), "ordine di default: gate, od, dist, pedale NAM (poi l'ampli)");
-        e.setPreOrder ({ 3, 1, 0, 2 }); e.setPostOrder ({ 1, 0 });
+        CHECK (RigEngine::unpack (RigEngine::pack ({ 2, 0, 4, 3, 1 }), 5) == std::vector<int> ({ 2, 0, 4, 3, 1 }), "pack/unpack dell'ordine");
+        CHECK (e.getPreOrder() == std::vector<int> ({ 0, 4, 2, 3, 1 }), "ordine di default: gate, multi mod, od, dist, pedale NAM (poi l'ampli)");
+        e.setPreOrder ({ 3, 1, 0, 4, 2 }); e.setPostOrder ({ 1, 0 });
         auto xml = e.saveState();
         RigEngine e2; e2.loadState (*xml);
-        CHECK (e2.getPreOrder() == std::vector<int> ({ 3, 1, 0, 2 }) && e2.getPostOrder() == std::vector<int> ({ 1, 0 }), "l'ordine viene salvato e ripristinato");
+        CHECK (e2.getPreOrder() == std::vector<int> ({ 3, 1, 0, 4, 2 }) && e2.getPostOrder() == std::vector<int> ({ 1, 0 }), "l'ordine viene salvato e ripristinato");
         xml->setAttribute ("preOrder", 0x1111);                       // permutazione non valida
         RigEngine e3; e3.loadState (*xml);
-        CHECK (e3.getPreOrder() == std::vector<int> ({ 0, 2, 3, 1 }), "ordine corrotto -> default");
+        CHECK (e3.getPreOrder() == std::vector<int> ({ 0, 4, 2, 3, 1 }), "ordine corrotto -> default");
         CHECK (e.pedal.bass == nullptr && e.amp.bass != nullptr, "il pedale NAM non ha EQ, l'ampli sì");
         CHECK (e.pedal.enabled->get() == 0.0f, "il pedale NAM parte spento");
         if (argc > 1 && juce::File (argv[1]).existsAsFile())

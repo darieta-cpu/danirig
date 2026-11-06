@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_devices/juce_audio_devices.h>
 #include "dsp/NoiseGate.h"
+#include "dsp/MultiMod.h"
 #include "dsp/Pedals.h"
 #include "dsp/NamAmp.h"
 #include "dsp/CabIR.h"
@@ -9,37 +10,46 @@
 
 namespace dr
 {
-// Motore audio: riceve il callback del device e fa girare la catena
-//   Ingresso -> Gate -> Overdrive -> Distortion -> NAM Amp -> Cabinet IR -> Delay -> Reverb -> Uscita
-// Sezione mono (fino al cab) + sezione stereo (delay, reverb). L'ordine dentro ogni sezione è un semplice vettore.
+// Motore audio condiviso da app standalone e plugin. Catena (ordine di default):
+//   Ingresso -> Gate -> Multi Mod -> Overdrive -> Distortion -> NAM Pedal -> NAM Amp -> Cabinet IR -> Delay -> Reverb -> Uscita
+// Sezione mono fino al cab, poi stereo. I moduli PRE (davanti all'ampli) e POST (dopo il cab) sono riordinabili.
 class RigEngine : public juce::AudioIODeviceCallback
 {
 public:
     RigEngine();
 
+    // --- uso come callback di un device (app standalone)
     void audioDeviceAboutToStart (juce::AudioIODevice* device) override;
-    void audioDeviceStopped() override;
-    void audioDeviceIOCallbackWithContext (const float* const* inputChannelData, int numInputChannels,
-                                           float* const* outputChannelData, int numOutputChannels,
-                                           int numSamples, const juce::AudioIODeviceCallbackContext& context) override;
+    void audioDeviceStopped() override { release(); }
+    void audioDeviceIOCallbackWithContext (const float* const* in, int numIn, float* const* out, int numOut,
+                                           int numSamples, const juce::AudioIODeviceCallbackContext&) override
+    {
+        process (in, numIn, out, numOut, numSamples);
+    }
+
+    // --- uso diretto (plugin e test)
+    void prepare (double sampleRate, int blockSize, int driverLatencySamples = 0);
+    void process (const float* const* in, int numIn, float* const* out, int numOut, int numSamples);
+    void release() { prepared = false; }
 
     // Moduli
     NoiseGate gate;
     NamAmp pedal { "nampedal", "NAM PEDAL", false };   // profilo NAM di un pedale, davanti all'ampli
     TubeScreamer od;
     Ds1 dist;
+    MultiMod mod;
     NamAmp amp { "amp", "NAM AMP", true };
     CabIR cab;
     DelayPedal delay;
     ReverbModule reverb;
 
-    // Gruppi riordinabili: PRE (davanti all'ampli, mono) e POST (dopo il cab, stereo).
-    // L'ordine è una permutazione impacchettata in un solo atomic: il thread audio la legge una volta per blocco.
-    static constexpr int kPre = 4, kPost = 2;
-    MonoModule*   preMods[kPre];      // gate, pedal, od, dist
-    StereoModule* postMods[kPost];    // delay, reverb
+    static constexpr int kPre = 5, kPost = 2;
+    MonoModule*   preMods[kPre];      // 0 gate, 1 pedal NAM, 2 overdrive, 3 distortion, 4 multi mod
+    StereoModule* postMods[kPost];    // 0 delay, 1 reverb
     std::vector<Module*> allModules() const;
 
+    static std::vector<int> defaultPreOrder()  { return { 0, 4, 2, 3, 1 }; }   // gate, mod, od, dist, pedale NAM
+    static std::vector<int> defaultPostOrder() { return { 0, 1 }; }
     std::vector<int> getPreOrder() const  { return unpack (preOrder.load(), kPre); }
     std::vector<int> getPostOrder() const { return unpack (postOrder.load(), kPost); }
     void setPreOrder (const std::vector<int>& o)  { preOrder.store (pack (o)); }
@@ -53,21 +63,23 @@ public:
     ParamOwner globals;
     Param *inputChannel, *inputTrim, *master;
 
-    // Stato per la UI (letto da timer, scritto dal thread audio)
+    // Stato per la UI (scritto dal thread audio)
     std::atomic<float> inPeak { 0.0f }, outPeak { 0.0f };
     std::atomic<double> sampleRate { 0.0 };
     std::atomic<int> bufferSize { 0 }, driverLatency { 0 }, chainLatency { 0 };
+    std::atomic<int> stateVersion { 0 };     // incrementato quando viene caricato uno stato: la UI si aggiorna
 
     // Preset / stato
     std::unique_ptr<juce::XmlElement> saveState() const;
     void loadState (const juce::XmlElement& xml);
     void resetAll();
     void sanitizeOrders();
+    void collectGarbage() { amp.collectGarbage(); pedal.collectGarbage(); }   // thread messaggi
 
 private:
-    std::atomic<uint32_t> preOrder { pack ({ 0, 2, 3, 1 }) };   // gate, od, dist, pedal
-    std::atomic<uint32_t> postOrder { pack ({ 0, 1 }) };        // delay, reverb
-    uint32_t lastOrderCode = 0;
+    std::atomic<uint32_t> preOrder { pack ({ 0, 4, 2, 3, 1 }) };
+    std::atomic<uint32_t> postOrder { pack ({ 0, 1 }) };
+    uint64_t lastOrderCode = 0;
     int fadeInLeft = 0, fadeInTotal = 1;
     bool prepared = false;
     int maxBlock = 512;

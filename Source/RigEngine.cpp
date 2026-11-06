@@ -8,11 +8,11 @@ RigEngine::RigEngine()
     inputTrim    = &globals.addFloat ("trim", "Input Trim", -24.0f, 24.0f, 0.0f, " dB", 1);
     master       = &globals.addFloat ("master", "Master", -40.0f, 6.0f, -6.0f, " dB", 1);
 
-    preMods[0] = &gate; preMods[1] = &pedal; preMods[2] = &od; preMods[3] = &dist;
+    preMods[0] = &gate; preMods[1] = &pedal; preMods[2] = &od; preMods[3] = &dist; preMods[4] = &mod;
     postMods[0] = &delay; postMods[1] = &reverb;
 
     // Valori iniziali: pedali spenti (si accendono con il footswitch), amp/cab/delay/reverb attivi.
-    for (Module* m : std::initializer_list<Module*> { &pedal, &od, &dist, &delay, &reverb })
+    for (Module* m : std::initializer_list<Module*> { &pedal, &od, &dist, &mod, &delay, &reverb })
     {
         m->enabled->set (0.0f);
         m->enabled->defV = 0.0f;
@@ -31,27 +31,29 @@ std::vector<Module*> RigEngine::allModules() const
 
 void RigEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
+    prepare (device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples(),
+             device->getInputLatencyInSamples() + device->getOutputLatencyInSamples());
+}
+
+void RigEngine::prepare (double sr, int blockSize, int driverLatencySamples)
+{
     prepared = false;
-    const double sr = device->getCurrentSampleRate();
-    maxBlock = std::max (device->getCurrentBufferSizeSamples(), 32);   // blocchi più grandi vengono spezzati nel callback
+    maxBlock = std::max (blockSize, 32);   // blocchi più grandi vengono spezzati in process()
     mono.assign ((size_t) maxBlock, 0.0f);
     left.assign ((size_t) maxBlock, 0.0f);
     right.assign ((size_t) maxBlock, 0.0f);
     for (auto* m : allModules()) m->prepare (sr, maxBlock);
 
     sampleRate.store (sr);
-    bufferSize.store (device->getCurrentBufferSizeSamples());
-    driverLatency.store (device->getInputLatencyInSamples() + device->getOutputLatencyInSamples());
-    lastOrderCode = preOrder.load() ^ (postOrder.load() << 16);
+    bufferSize.store (blockSize);
+    driverLatency.store (driverLatencySamples);
+    lastOrderCode = (uint64_t) preOrder.load() | ((uint64_t) postOrder.load() << 32);
     fadeInTotal = std::max (1, (int) (0.012 * sr));
     fadeInLeft = 0;
     prepared = true;
 }
 
-void RigEngine::audioDeviceStopped() { prepared = false; }
-
-void RigEngine::audioDeviceIOCallbackWithContext (const float* const* in, int numIn, float* const* out, int numOut,
-                                                  int numSamples, const juce::AudioIODeviceCallbackContext&)
+void RigEngine::process (const float* const* in, int numIn, float* const* out, int numOut, int numSamples)
 {
     juce::ScopedNoDenormals noDenormals;
 
@@ -78,7 +80,7 @@ void RigEngine::audioDeviceIOCallbackWithContext (const float* const* in, int nu
         for (int i = 0; i < n; ++i) inPk = std::max (inPk, std::abs (mono[(size_t) i]));
 
         const uint32_t pre = preOrder.load (std::memory_order_relaxed), post = postOrder.load (std::memory_order_relaxed);
-        const uint32_t code = pre ^ (post << 16);
+        const uint64_t code = (uint64_t) pre | ((uint64_t) post << 32);
         if (code != lastOrderCode) { lastOrderCode = code; fadeInLeft = fadeInTotal; }   // ordine cambiato: fade-in di 12 ms anti-click
 
         for (int k = 0; k < kPre; ++k) preMods[(pre >> (4 * k)) & 0xF]->run (mono.data(), n);
@@ -166,14 +168,14 @@ void RigEngine::loadState (const juce::XmlElement& xml)
 void RigEngine::sanitizeOrders()
 {
     auto valid = [] (const std::vector<int>& o, int n) { std::vector<int> s (o); std::sort (s.begin(), s.end()); for (int i = 0; i < n; ++i) if (s[(size_t) i] != i) return false; return (int) o.size() == n; };
-    if (! valid (getPreOrder(), kPre))   setPreOrder ({ 0, 2, 3, 1 });
-    if (! valid (getPostOrder(), kPost)) setPostOrder ({ 0, 1 });
+    if (! valid (getPreOrder(), kPre))   setPreOrder (defaultPreOrder());
+    if (! valid (getPostOrder(), kPost)) setPostOrder (defaultPostOrder());
 }
 
 void RigEngine::resetAll()
 {
-    setPreOrder ({ 0, 2, 3, 1 });
-    setPostOrder ({ 0, 1 });
+    setPreOrder (defaultPreOrder());
+    setPostOrder (defaultPostOrder());
     for (auto& p : globals.params) p->reset();
     for (auto* m : allModules()) for (auto& p : m->params) p->reset();
 }
