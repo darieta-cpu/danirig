@@ -106,7 +106,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxext-dev libfreetype-dev libfontconfig1-dev libgl-dev
       - name: Configure + build
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDANIRIG_BUILD_TESTS=ON
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DDANIRIG_BUILD_TESTS=ON -DDANIRIG_NAM_AS_STATIC=ON
           cmake --build build --target DaniRigTests -j $(nproc)
       - name: Esegui i test
         run: |
