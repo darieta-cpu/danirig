@@ -8,11 +8,11 @@ RigEngine::RigEngine()
     inputTrim    = &globals.addFloat ("trim", "Input Trim", -24.0f, 24.0f, 0.0f, " dB", 1);
     master       = &globals.addFloat ("master", "Master", -40.0f, 6.0f, -6.0f, " dB", 1);
 
-    preMods[0] = &gate; preMods[1] = &pedal; preMods[2] = &od; preMods[3] = &dist; preMods[4] = &mod;
+    preMods[0] = &gate; preMods[1] = &pedal; preMods[2] = &od; preMods[3] = &dist; preMods[4] = &mod; preMods[5] = &comp;
     postMods[0] = &delay; postMods[1] = &reverb;
 
     // Valori iniziali: pedali spenti (si accendono con il footswitch), amp/cab/delay/reverb attivi.
-    for (Module* m : std::initializer_list<Module*> { &pedal, &od, &dist, &mod, &delay, &reverb })
+    for (Module* m : std::initializer_list<Module*> { &pedal, &od, &dist, &mod, &comp, &delay, &reverb })
     {
         m->enabled->set (0.0f);
         m->enabled->defV = 0.0f;
@@ -129,10 +129,10 @@ void RigEngine::process (const float* const* in, int numIn, float* const* out, i
 }
 
 // ------------------------------------------------------------------------------------------------
-std::unique_ptr<juce::XmlElement> RigEngine::saveState() const
+std::unique_ptr<juce::XmlElement> RigEngine::saveState (bool includeBank) const
 {
     auto xml = std::make_unique<juce::XmlElement> ("DaniRigPreset");
-    xml->setAttribute ("version", 1);
+    xml->setAttribute ("version", 2);
     for (auto& p : globals.params) xml->setAttribute ("g." + p->id, (double) p->get());
     for (auto* m : allModules())
         for (auto& p : m->params) xml->setAttribute (m->moduleId + "." + p->id, (double) p->get());
@@ -141,6 +141,7 @@ std::unique_ptr<juce::XmlElement> RigEngine::saveState() const
     xml->setAttribute ("preOrder", (int) preOrder.load());
     xml->setAttribute ("postOrder", (int) postOrder.load());
     xml->setAttribute ("irPath", cab.getIRPath());
+    if (includeBank) xml->addChildElement (saveBank().release());
     return xml;
 }
 
@@ -158,10 +159,116 @@ void RigEngine::loadState (const juce::XmlElement& xml)
     if (xml.hasAttribute ("preOrder"))  preOrder.store ((uint32_t) xml.getIntAttribute ("preOrder"));
     if (xml.hasAttribute ("postOrder")) postOrder.store ((uint32_t) xml.getIntAttribute ("postOrder"));
     sanitizeOrders();
+    // Si ricarica solo ciò che cambia: cambiando patch lo stesso modello/IR non viene ricaricato
     juce::File nam (xml.getStringAttribute ("namPath")), ir (xml.getStringAttribute ("irPath")), ped (xml.getStringAttribute ("pedalPath"));
-    if (nam.existsAsFile()) amp.loadModelAsync (nam);
-    if (ped.existsAsFile()) pedal.loadModelAsync (ped);
-    if (ir.existsAsFile()) cab.loadIR (ir);
+    if (nam.existsAsFile() && nam.getFullPathName() != amp.getModelPath())   amp.loadModelAsync (nam);
+    if (ped.existsAsFile() && ped.getFullPathName() != pedal.getModelPath()) pedal.loadModelAsync (ped);
+    if (ir.existsAsFile()  && ir.getFullPathName()  != cab.getIRPath())      cab.loadIR (ir);
+    if (auto* bank = xml.getChildByName ("Bank")) loadBank (*bank);
+    ++stateVersion;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Banco patch / scene
+std::unique_ptr<juce::XmlElement> RigEngine::saveSnapshot() const
+{
+    auto xml = std::make_unique<juce::XmlElement> ("Snapshot");
+    for (auto* m : allModules())
+        for (auto& p : m->params) xml->setAttribute (m->moduleId + "." + p->id, (double) p->get());
+    return xml;
+}
+
+void RigEngine::applySnapshot (const juce::XmlElement& snap)
+{
+    for (auto* m : allModules())
+        for (auto& p : m->params)
+        {
+            const auto key = m->moduleId + "." + p->id;
+            if (snap.hasAttribute (key)) p->set ((float) snap.getDoubleAttribute (key));
+        }
+    ++stateVersion;
+}
+
+bool RigEngine::hasSlot (bool scene, int i) const
+{
+    if (i < 0 || i >= kSlots) return false;
+    return scene ? patches[sceneOwner()].scene[i] != nullptr : patches[i].state != nullptr;
+}
+
+juce::String RigEngine::slotName (bool scene, int i) const
+{
+    if (i < 0 || i >= kSlots) return {};
+    const auto n = scene ? patches[sceneOwner()].sceneName[i] : patches[i].name;
+    return n.isNotEmpty() ? n : (scene ? "Scene " : "Patch ") + juce::String (i + 1);
+}
+
+void RigEngine::setSlotName (bool scene, int i, const juce::String& name)
+{
+    if (i < 0 || i >= kSlots) return;
+    (scene ? patches[sceneOwner()].sceneName[i] : patches[i].name) = name.trim();
+}
+
+void RigEngine::storeSlot (bool scene, int i)
+{
+    if (i < 0 || i >= kSlots) return;
+    if (scene) { patches[sceneOwner()].scene[i] = saveSnapshot(); currentScene = i; }
+    else       { patches[i].state = saveState (false); currentPatch = i; }
+}
+
+bool RigEngine::recallSlot (bool scene, int i)
+{
+    if (! hasSlot (scene, i)) return false;
+    if (scene) { applySnapshot (*patches[sceneOwner()].scene[i]); currentScene = i; }
+    else       { loadState (*patches[i].state); currentPatch = i; currentScene = -1; }
+    return true;
+}
+
+std::unique_ptr<juce::XmlElement> RigEngine::saveBank() const
+{
+    auto bank = std::make_unique<juce::XmlElement> ("Bank");
+    bank->setAttribute ("sceneMode", sceneMode ? 1 : 0);
+    bank->setAttribute ("currentPatch", currentPatch);
+    bank->setAttribute ("currentScene", currentScene);
+    for (int i = 0; i < kSlots; ++i)
+    {
+        auto* p = bank->createNewChildElement ("Patch");
+        p->setAttribute ("index", i);
+        p->setAttribute ("name", patches[i].name);
+        if (patches[i].state) p->addChildElement (new juce::XmlElement (*patches[i].state));
+        for (int k = 0; k < kSlots; ++k)
+            if (patches[i].scene[k])
+            {
+                auto* sc = new juce::XmlElement (*patches[i].scene[k]);
+                sc->setTagName ("Scene");
+                sc->setAttribute ("index", k);
+                sc->setAttribute ("sceneName", patches[i].sceneName[k]);
+                p->addChildElement (sc);
+            }
+    }
+    return bank;
+}
+
+void RigEngine::loadBank (const juce::XmlElement& bank)
+{
+    sceneMode = bank.getIntAttribute ("sceneMode") != 0;
+    currentPatch = juce::jlimit (-1, kSlots - 1, bank.getIntAttribute ("currentPatch", -1));
+    currentScene = juce::jlimit (-1, kSlots - 1, bank.getIntAttribute ("currentScene", -1));
+    for (auto& p : patches) { p.state.reset(); p.name = {}; for (int k = 0; k < kSlots; ++k) { p.scene[k].reset(); p.sceneName[k] = {}; } }
+    for (auto* pe : bank.getChildWithTagNameIterator ("Patch"))
+    {
+        const int i = pe->getIntAttribute ("index", -1);
+        if (i < 0 || i >= kSlots) continue;
+        patches[i].name = pe->getStringAttribute ("name");
+        if (auto* st = pe->getChildByName ("DaniRigPreset")) patches[i].state = std::make_unique<juce::XmlElement> (*st);
+        for (auto* sc : pe->getChildWithTagNameIterator ("Scene"))
+        {
+            const int k = sc->getIntAttribute ("index", -1);
+            if (k < 0 || k >= kSlots) continue;
+            patches[i].scene[k] = std::make_unique<juce::XmlElement> (*sc);
+            patches[i].scene[k]->setTagName ("Snapshot");
+            patches[i].sceneName[k] = sc->getStringAttribute ("sceneName");
+        }
+    }
 }
 
 // Una permutazione non valida (file di preset vecchio o corrotto) ripristina l'ordine di default.

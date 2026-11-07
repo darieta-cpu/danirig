@@ -7,6 +7,7 @@
 #include "dsp/Reverb.h"
 #include "dsp/Resampler.h"
 #include "dsp/MultiMod.h"
+#include "dsp/DynaComp.h"
 #include "RigEngine.h"
 #include <juce_events/juce_events.h>
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -273,18 +274,87 @@ int main (int argc, char** argv)
         CHECK (finite (a) && rms (a, 2560, 5000) > 0.01f, "elaborazione in-place (plugin)");
     }
 
+    std::printf ("[Phase 90: notch e tremolo piu' profondo]\n");
+    {
+        MultiMod m; m.prepare (sr, block); m.enabled->set (1.0f);
+        m.find ("mode")->set (0.0f); m.find ("rate")->set (0.1f); m.find ("depth")->set (0.0f); m.reset();
+        float gmin = 10.0f, gmax = 0.0f, fmin = 0;
+        for (double f = 100.0; f < 6000.0; f *= 1.07)
+        {
+            auto x = sine (sr, f, 0.3, 12032);
+            for (size_t i = 0; i + block <= x.size(); i += block) m.run (x.data() + i, block);
+            const float g = rms (x, 8000, 12000) / 0.2121f;
+            if (g < gmin) { gmin = g; fmin = (float) f; }
+            gmax = std::max (gmax, g);
+        }
+        std::printf ("       phaser: guadagno min %.3f (a %.0f Hz) max %.3f\n", gmin, fmin, gmax);
+        CHECK (gmin < 0.35f && gmax > 0.8f, "phaser: notch profondi (almeno -9 dB) e passa-tutto fuori dai notch");
+        // Tremolo con i default del modo: dip chiaramente udibile (>= 12 dB)
+        m.find ("mode")->set (2.0f); m.applyModeDefaults(); m.reset();
+        auto x = sine (sr, 1000, 0.5, 48128);
+        for (size_t i = 0; i + block <= x.size(); i += block) m.run (x.data() + i, block);
+        float mn = 1e9f, mx = 0; for (size_t i = 12000; i + 240 <= 48000; i += 240) { const float r = rms (x, i, i + 240); mn = std::min (mn, r); mx = std::max (mx, r); }
+        std::printf ("       tremolo (default): inviluppo min %.3f max %.3f  (dip %.1f dB)\n", mn, mx, 20.0f * std::log10 (mx / std::max (mn, 1e-6f)));
+        CHECK (mx / std::max (mn, 1e-6f) > 4.0f, "tremolo con i default: dip di almeno 12 dB");
+    }
+
+    std::printf ("[Compressore Dyna Comp]\n");
+    {
+        DynaComp c; c.prepare (sr, block); c.enabled->set (1.0f);
+        c.find ("sens")->set (8.0f); c.find ("output")->set (0.0f); c.reset();
+        auto lo = sine (sr, 220, 0.03, 48128), hi = sine (sr, 220, 0.5, 48128);
+        for (size_t i = 0; i + block <= lo.size(); i += block) c.run (lo.data() + i, block);
+        c.reset();
+        for (size_t i = 0; i + block <= hi.size(); i += block) c.run (hi.data() + i, block);
+        const float rl = rms (lo, 24000, 48000), rh = rms (hi, 24000, 48000);
+        std::printf ("       ingresso 0.03 / 0.5 (24.4 dB di differenza) -> uscita %.3f / %.3f (%.1f dB)\n", rl, rh, 20.0f * std::log10 (rh / rl));
+        CHECK (finite (lo) && finite (hi) && 20.0f * std::log10 (rh / rl) < 8.0f, "la differenza di livello si riduce di molto (sustain)");
+        DynaComp d; d.prepare (sr, block); d.enabled->set (1.0f); d.find ("mix")->set (0.0f); d.reset();
+        auto t = sine (sr, 220, 0.3, 12032); auto t0 = t;
+        for (size_t i = 0; i + block <= t.size(); i += block) d.run (t.data() + i, block);
+        float diff = 0; for (size_t i = 0; i < t.size(); ++i) diff = std::max (diff, std::abs (t[i] - t0[i]));
+        CHECK (diff < 1e-4f, "Mix 0 % = segnale pulito");
+    }
+
+    std::printf ("[Banco patch / scene]\n");
+    {
+        RigEngine e;
+        e.od.find ("drive")->set (8.0f); e.storeSlot (false, 0);
+        e.od.find ("drive")->set (2.0f); e.storeSlot (false, 1);
+        const int v0 = e.stateVersion.load();
+        CHECK (e.recallSlot (false, 0) && std::abs (e.od.find ("drive")->get() - 8.0f) < 1e-4f && e.currentPatch == 0, "richiamo patch 1");
+        CHECK (e.stateVersion.load() > v0, "la UI viene avvisata del cambio");
+        CHECK (e.recallSlot (false, 1) && std::abs (e.od.find ("drive")->get() - 2.0f) < 1e-4f && e.currentPatch == 1, "richiamo patch 2");
+        CHECK (! e.recallSlot (false, 2) && ! e.hasSlot (false, 2), "patch vuoto: nessun effetto");
+        // scene dentro al patch corrente (2)
+        e.od.enabled->set (1.0f); e.od.find ("drive")->set (9.0f); e.storeSlot (true, 0);
+        e.od.enabled->set (0.0f); e.od.find ("drive")->set (1.0f); e.storeSlot (true, 1);
+        e.setPreOrder ({ 5, 4, 3, 2, 1, 0 });
+        CHECK (e.recallSlot (true, 0) && e.od.enabled->on() && std::abs (e.od.find ("drive")->get() - 9.0f) < 1e-4f, "scena 1: on + drive 9");
+        CHECK (e.recallSlot (true, 1) && ! e.od.enabled->on() && std::abs (e.od.find ("drive")->get() - 1.0f) < 1e-4f, "scena 2: off + drive 1");
+        CHECK (e.getPreOrder() == std::vector<int> ({ 5, 4, 3, 2, 1, 0 }), "le scene non toccano l'ordine dei moduli");
+        // salvataggio e ripristino con il banco
+        e.sceneMode = true; e.setSlotName (false, 0, "Clean"); e.setSlotName (true, 0, "Solo");
+        auto xml = e.saveState();
+        RigEngine e2; e2.loadState (*xml);
+        CHECK (e2.sceneMode && e2.currentPatch == 1 && e2.hasSlot (false, 0) && e2.hasSlot (false, 1) && ! e2.hasSlot (false, 2), "banco ripristinato dal file");
+        CHECK (e2.slotName (false, 0) == "Clean" && e2.slotName (true, 0) == "Solo" && e2.slotName (false, 1) == "Patch 2", "nomi salvati (e predefiniti)");
+        CHECK (e2.recallSlot (true, 0) && std::abs (e2.od.find ("drive")->get() - 9.0f) < 1e-4f, "la scena sopravvive al salvataggio");
+        CHECK (e2.recallSlot (false, 0) && std::abs (e2.od.find ("drive")->get() - 8.0f) < 1e-4f, "e anche il patch");
+    }
+
     std::printf ("[Ordine moduli + pedale NAM]\n");
     {
         RigEngine e;
-        CHECK (RigEngine::unpack (RigEngine::pack ({ 2, 0, 4, 3, 1 }), 5) == std::vector<int> ({ 2, 0, 4, 3, 1 }), "pack/unpack dell'ordine");
-        CHECK (e.getPreOrder() == std::vector<int> ({ 0, 4, 2, 3, 1 }), "ordine di default: gate, multi mod, od, dist, pedale NAM (poi l'ampli)");
-        e.setPreOrder ({ 3, 1, 0, 4, 2 }); e.setPostOrder ({ 1, 0 });
+        CHECK (RigEngine::unpack (RigEngine::pack ({ 2, 0, 4, 5, 3, 1 }), 6) == std::vector<int> ({ 2, 0, 4, 5, 3, 1 }), "pack/unpack dell'ordine");
+        CHECK (e.getPreOrder() == std::vector<int> ({ 0, 5, 4, 2, 3, 1 }), "ordine di default: gate, comp, multi mod, od, dist, pedale NAM (poi l'ampli)");
+        e.setPreOrder ({ 3, 1, 0, 4, 2, 5 }); e.setPostOrder ({ 1, 0 });
         auto xml = e.saveState();
         RigEngine e2; e2.loadState (*xml);
-        CHECK (e2.getPreOrder() == std::vector<int> ({ 3, 1, 0, 4, 2 }) && e2.getPostOrder() == std::vector<int> ({ 1, 0 }), "l'ordine viene salvato e ripristinato");
+        CHECK (e2.getPreOrder() == std::vector<int> ({ 3, 1, 0, 4, 2, 5 }) && e2.getPostOrder() == std::vector<int> ({ 1, 0 }), "l'ordine viene salvato e ripristinato");
         xml->setAttribute ("preOrder", 0x1111);                       // permutazione non valida
         RigEngine e3; e3.loadState (*xml);
-        CHECK (e3.getPreOrder() == std::vector<int> ({ 0, 4, 2, 3, 1 }), "ordine corrotto -> default");
+        CHECK (e3.getPreOrder() == std::vector<int> ({ 0, 5, 4, 2, 3, 1 }), "ordine corrotto -> default");
         CHECK (e.pedal.bass == nullptr && e.amp.bass != nullptr, "il pedale NAM non ha EQ, l'ampli sì");
         CHECK (e.pedal.enabled->get() == 0.0f, "il pedale NAM parte spento");
         if (argc > 1 && juce::File (argv[1]).existsAsFile())

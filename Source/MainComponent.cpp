@@ -7,7 +7,7 @@ MainComponent::MainComponent()
     loadSettings();
     ui = std::make_unique<RigUI> (engine, [this] { showAudioSettings(); }, [this] { return deviceManager.getCpuUsage(); });
     addAndMakeVisible (*ui);
-    setSize (1100, 688);
+    setSize (1100, 765);
 
     // audio: 48 kHz / 128 campioni come punto di partenza, poi lo stato salvato dell'utente
     std::unique_ptr<juce::XmlElement> savedAudio;

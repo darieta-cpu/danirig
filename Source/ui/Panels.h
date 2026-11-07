@@ -274,6 +274,7 @@ public:
         for (const char* id : { "rate", "depth", "level" }) addKnob (*m.find (id));
         modeBox = addChoice (*m.find ("mode"));
         divBox  = addChoice (*m.find ("div"));
+        modeBox->extra = [this] { mm.applyModeDefaults(); for (auto& k : knobs) k->refresh(); };   // rate/depth tipici del modo
         tap.setButtonText ("TAP");
         tap.setColour (juce::TextButton::buttonColourId, juce::Colour (0xff0f1c1e));
         tap.onClick = [this] { mm.tap(); for (auto& k : knobs) k->refresh(); };
@@ -282,24 +283,24 @@ public:
 
     void resized() override
     {
-        auto r = getLocalBounds().reduced (12, 10);
+        auto r = getLocalBounds().reduced (8, 10);
         r.removeFromTop (26);
         std::vector<Knob*> ks; for (auto& k : knobs) ks.push_back (k.get());
         rowOfKnobs (r.removeFromTop (84), ks);
         auto row = r.removeFromTop (30);
-        modeBox->setBounds (row.removeFromLeft (104));
+        modeBox->setBounds (row.removeFromLeft (84));
         row.removeFromLeft (6);
-        divBox->setBounds (row.removeFromLeft (100));
+        divBox->setBounds (row.removeFromLeft (92));
         const int w = getWidth(), h = getHeight();
-        titleArea = juce::Rectangle<int> (12, h - 62, 118, 34);
-        tap.setBounds (w - 110, h - 56, 50, 34);
-        footswitch.setBounds (juce::Rectangle<int> (44, 44).withCentre ({ w - 30, h - 34 }));
+        titleArea = juce::Rectangle<int> (10, h - 62, 100, 34);
+        tap.setBounds (w - 98, h - 56, 46, 34);
+        footswitch.setBounds (juce::Rectangle<int> (40, 40).withCentre ({ w - 26, h - 34 }));
     }
 
     void paintTitle (juce::Graphics& g, juce::Rectangle<int> a) override
     {
         g.setColour (textCol);
-        g.setFont (juce::Font (juce::FontOptions (18.0f, juce::Font::bold | juce::Font::italic)));
+        g.setFont (juce::Font (juce::FontOptions (16.0f, juce::Font::bold | juce::Font::italic)));
         g.drawText (module.title, a, juce::Justification::centredLeft);
     }
 
@@ -331,19 +332,19 @@ public:
     void resized() override
     {
         const int w = getWidth();
-        titleArea = juce::Rectangle<int> (16, 6, 110, 22);
+        titleArea = juce::Rectangle<int> (10, 6, 82, 22);
         slotArea = juce::Rectangle<int> (12, 32, w - 24, 22);
         prev.setBounds (12, 58, 32, 24); next.setBounds (w - 44, 58, 32, 24); load.setBounds (48, 58, w - 96, 24);
-        knobs[0]->setBounds (10, 86, 66, 78); knobs[1]->setBounds (78, 86, 66, 78);
-        norm->setBounds (w - 78, 96, 70, 22);
-        sizeBox->setBounds (w - 76, 126, 62, 26);
+        knobs[0]->setBounds (4, 86, 60, 78); knobs[1]->setBounds (64, 86, 60, 78);
+        norm->setBounds (w - 70, 96, 66, 22);
+        sizeBox->setBounds (w - 68, 126, 60, 26);
         footswitch.setBounds (juce::Rectangle<int> (48, 48).withCentre ({ w / 2, getHeight() - 28 }));
     }
 
     void paintTitle (juce::Graphics& g, juce::Rectangle<int> a) override
     {
         g.setColour (textCol);
-        g.setFont (juce::Font (juce::FontOptions (16.0f, juce::Font::bold | juce::Font::italic)));
+        g.setFont (juce::Font (juce::FontOptions (13.5f, juce::Font::bold | juce::Font::italic)));
         g.drawText (module.title, a, juce::Justification::centredLeft);
     }
 
@@ -574,7 +575,7 @@ public:
         std::vector<Node> nodes { { "IN", true } };
         auto shortName = [] (const juce::String& id) -> juce::String
         {
-            if (id == "gate") return "GATE"; if (id == "nampedal") return "NAM P"; if (id == "od") return "OD";
+            if (id == "gate") return "GATE"; if (id == "comp") return "COMP"; if (id == "nampedal") return "NAM P"; if (id == "od") return "OD";
             if (id == "dist") return "DIST"; if (id == "mod") return "MOD"; if (id == "delay") return "DLY"; return "REV";
         };
         for (int k : engine.getPreOrder())  nodes.push_back ({ shortName (engine.preMods[k]->moduleId),  engine.preMods[k]->isActive() });
@@ -614,5 +615,131 @@ public:
     }
 private:
     RigEngine& engine;
+};
+// ---------------------------------------------------------------------------------------------
+// Switch a pedale per richiamare patch o scene (1-2-3)
+class SlotSwitch : public juce::Button
+{
+public:
+    explicit SlotSwitch (int n) : juce::Button ("slot"), num (n) {}
+    bool lit = false, filled = false;
+
+    void paintButton (juce::Graphics& g, bool over, bool down) override
+    {
+        auto r = getLocalBounds().toFloat().reduced (2.0f);
+        const juce::Point<float> led (r.getCentreX(), r.getY() + 6.0f);
+        if (lit) { g.setColour (col::ledGreen.withAlpha (0.35f)); g.fillEllipse (led.x - 9, led.y - 9, 18, 18); }
+        g.setColour (lit ? col::ledGreen : juce::Colour (0xff1f3a26));
+        g.fillEllipse (led.x - 5, led.y - 5, 10, 10);
+        g.setColour (juce::Colours::black); g.drawEllipse (led.x - 5, led.y - 5, 10, 10, 1.0f);
+
+        const float d = std::min (r.getWidth(), r.getHeight() - 16.0f);
+        auto c = juce::Rectangle<float> (d, d).withCentre ({ r.getCentreX(), r.getBottom() - d * 0.5f });
+        g.setColour (juce::Colours::black.withAlpha (0.5f)); g.fillEllipse (c.translated (1.5f, 3.0f));
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xfff2f2f2), c.getX(), c.getY(), juce::Colour (0xff6c7077), c.getRight(), c.getBottom(), false));
+        g.fillEllipse (c);
+        auto in = c.reduced (d * 0.14f);
+        const float k = down ? 0.75f : (over ? 1.1f : 1.0f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff9aa0a8).withMultipliedBrightness (k), in.getX(), in.getY(),
+                                                 juce::Colour (0xffd8dbe0).withMultipliedBrightness (k), in.getRight(), in.getBottom(), false));
+        g.fillEllipse (in);
+        g.setColour (juce::Colours::black.withAlpha (0.6f)); g.drawEllipse (c, 1.2f);
+        g.setColour (filled ? juce::Colour (0xff1a1c1f) : juce::Colour (0xff6a6e74));
+        g.setFont (uiFont (d * 0.42f, true));
+        g.drawText (juce::String (num), in, juce::Justification::centred);
+    }
+private:
+    int num;
+};
+
+class PatchBar : public juce::Component
+{
+public:
+    explicit PatchBar (RigEngine& e) : engine (e)
+    {
+        for (auto* b : { &patchBtn, &sceneBtn }) { addAndMakeVisible (*b); }
+        patchBtn.onClick = [this] { engine.sceneMode = false; refresh(); };
+        sceneBtn.onClick = [this] { engine.sceneMode = true;  refresh(); };
+        for (int i = 0; i < 3; ++i)
+        {
+            sw[i] = std::make_unique<SlotSwitch> (i + 1);
+            sw[i]->onClick = [this, i] { engine.recallSlot (engine.sceneMode, i); refresh(); if (onRecalled) onRecalled(); };
+            addAndMakeVisible (*sw[i]);
+
+            save[i].setButtonText ("SAVE");
+            save[i].onClick = [this, i] { engine.storeSlot (engine.sceneMode, i); flash (i); refresh(); };
+            addAndMakeVisible (save[i]);
+
+            names[i].setFont (uiFont (15.0f, true));
+            names[i].setColour (juce::Label::textColourId, col::text);
+            names[i].setColour (juce::Label::textWhenEditingColourId, juce::Colours::white);
+            names[i].setColour (juce::Label::backgroundWhenEditingColourId, juce::Colour (0xff0b0d0f));
+            names[i].setJustificationType (juce::Justification::centredLeft);
+            names[i].onTextChange = [this, i] { engine.setSlotName (engine.sceneMode, i, names[i].getText()); };
+            addAndMakeVisible (names[i]);
+        }
+        refresh();
+    }
+
+    std::function<void()> onRecalled;
+
+    void refresh()
+    {
+        const bool sc = engine.sceneMode;
+        patchBtn.setColour (juce::TextButton::buttonColourId, sc ? juce::Colour (0xff2a2d33) : juce::Colour (0xff8a6d20));
+        sceneBtn.setColour (juce::TextButton::buttonColourId, sc ? juce::Colour (0xff8a6d20) : juce::Colour (0xff2a2d33));
+        const int cur = sc ? engine.currentScene : engine.currentPatch;
+        for (int i = 0; i < 3; ++i)
+        {
+            const bool filled = engine.hasSlot (sc, i);
+            sw[i]->filled = filled; sw[i]->lit = (cur == i) && filled; sw[i]->repaint();
+            names[i].setEditable (false, filled, false);
+            names[i].setText (flashing == i ? juce::String ("SAVED!") : filled ? engine.slotName (sc, i) : juce::String ("(empty)"), juce::dontSendNotification);
+            names[i].setColour (juce::Label::textColourId, filled ? col::text : col::dim);
+        }
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced (1.0f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1d2024), 0, r.getY(), juce::Colour (0xff0e1012), 0, r.getBottom(), false));
+        g.fillRoundedRectangle (r, 10.0f);
+        g.setColour (col::gold.withAlpha (0.45f)); g.drawRoundedRectangle (r, 10.0f, 1.2f);
+        g.setColour (col::gold); g.setFont (uiFont (12.0f, true));
+        g.drawText ("FOOTSWITCH MODE", 20, 8, 170, 16, juce::Justification::centredLeft);
+        g.setColour (col::dim); g.setFont (uiFont (10.5f));
+        g.drawText (engine.sceneMode ? "SCENE: parametri e on/off dentro al patch corrente (cambio istantaneo)"
+                                     : "PATCH: stato completo (modelli, IR, ordine dei moduli, parametri)",
+                    juce::Rectangle<int> (20, 58, 280, 30), juce::Justification::topLeft, true);
+    }
+
+    void resized() override
+    {
+        patchBtn.setBounds (20, 26, 84, 28);
+        sceneBtn.setBounds (110, 26, 84, 28);
+        for (int i = 0; i < 3; ++i)
+        {
+            const int x = 330 + i * 300;
+            sw[i]->setBounds (x, 4, 72, 84);
+            names[i].setBounds (x + 82, 14, 170, 28);
+            save[i].setBounds (x + 82, 50, 64, 26);
+        }
+    }
+
+private:
+    void flash (int i)
+    {
+        flashing = i;
+        juce::Component::SafePointer<PatchBar> self (this);
+        juce::Timer::callAfterDelay (700, [self] { if (self != nullptr) { self->flashing = -1; self->refresh(); } });
+    }
+
+    RigEngine& engine;
+    juce::TextButton patchBtn { "PATCH" }, sceneBtn { "SCENE" };
+    std::unique_ptr<SlotSwitch> sw[3];
+    juce::TextButton save[3];
+    juce::Label names[3];
+    int flashing = -1;
 };
 } // namespace dr::ui

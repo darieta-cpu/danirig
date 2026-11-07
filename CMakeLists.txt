@@ -81,6 +81,8 @@ juce_add_gui_app(DaniRig
     COMPANY_NAME "DaniArieta"
     BUNDLE_ID "com.daniarieta.danirig"
     VERSION ${PROJECT_VERSION}
+    ICON_BIG "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon_1024.png"
+    ICON_SMALL "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon_256.png"
     MICROPHONE_PERMISSION_ENABLED TRUE
     MICROPHONE_PERMISSION_TEXT "DaniRig usa l'ingresso audio (la tua chitarra) per elaborare il suono in tempo reale.")
 

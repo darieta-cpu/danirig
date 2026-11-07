@@ -35,6 +35,9 @@ RigUI::RigUI (RigEngine& e, std::function<void()> audioSettings, std::function<d
 
     gatePanel  = std::make_unique<GatePanel> (engine.gate);
     modPanel   = std::make_unique<MultiModPanel> (engine.mod);
+    compPanel  = std::make_unique<PedalPanel> (engine.comp, juce::Colour (0xffc02a2f), juce::Colours::white, juce::Colour (0xff2a1012), juce::Colours::white);
+    patchBar   = std::make_unique<PatchBar> (engine);
+    patchBar->onRecalled = [this] { refreshAll(); };
     pedalPanel = std::make_unique<NamPedalPanel> (engine.pedal);
     odPanel    = std::make_unique<PedalPanel> (engine.od,   juce::Colour (0xff3f9a45), juce::Colours::white, juce::Colour (0xff1c2a1e), juce::Colours::white);
     distPanel  = std::make_unique<PedalPanel> (engine.dist, juce::Colour (0xffe8791d), juce::Colour (0xff160c04), juce::Colour (0xff1b1109), juce::Colour (0xfff2f2f2));
@@ -45,19 +48,20 @@ RigUI::RigUI (RigEngine& e, std::function<void()> audioSettings, std::function<d
     flow       = std::make_unique<FlowPanel> (engine);
     flow->showDriverInfo = (bool) cpuCb;
 
-    for (juce::Component* c : std::initializer_list<juce::Component*> { gatePanel.get(), modPanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get(),
-                                                                       flow.get(), ampPanel.get(), cabPanel.get(), delayPanel.get(), reverbPanel.get() })
+    for (juce::Component* c : std::initializer_list<juce::Component*> { gatePanel.get(), modPanel.get(), compPanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get(),
+                                                                       flow.get(), patchBar.get(), ampPanel.get(), cabPanel.get(), delayPanel.get(), reverbPanel.get() })
         content.addAndMakeVisible (c);
 
-    // Layout 1280x800: barra 0-66, schema 72-108, pedali 116-336, ampli 344-554, cab/delay/reverb 562-782
-    for (auto* p : std::initializer_list<PanelBase*> { gatePanel.get(), modPanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get() }) p->setSize (240, 220);
+    // Layout 1280x890: barra 0-66, schema 72-108, pedali 116-336, ampli 344-554, cab/delay/reverb 562-782, patch bar 790-886
+    for (auto* p : std::initializer_list<PanelBase*> { gatePanel.get(), modPanel.get(), compPanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get() }) p->setSize (198, 220);
     delayPanel->setSize (440, 220);
     reverbPanel->setSize (300, 220);
     flow->setBounds (20, 72, 1240, 36);
     ampPanel->setBounds (20, 344, 1240, 210);
     cabPanel->setBounds (20, 562, 480, 220);
+    patchBar->setBounds (20, 790, 1240, 92);
 
-    preGroup.panels  = { gatePanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get(), modPanel.get() };   // indici = engine.preMods
+    preGroup.panels  = { gatePanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get(), modPanel.get(), compPanel.get() };   // indici = engine.preMods
     preGroup.x = 20;  preGroup.y = 116;
     postGroup.panels = { delayPanel.get(), reverbPanel.get() };                                                  // indici = engine.postMods
     postGroup.x = 510; postGroup.y = 562;
@@ -92,7 +96,7 @@ RigUI::RigUI (RigEngine& e, std::function<void()> audioSettings, std::function<d
     content.addAndMakeVisible (inMeter);     inMeter.setBounds (772, 24, 120, 14);
     content.addAndMakeVisible (outMeter);    outMeter.setBounds (975, 24, 120, 14);
 
-    setSize (1100, 688);
+    setSize (1100, 765);
     lastStateVersion = engine.stateVersion.load();
     refreshAll();
     startTimerHz (30);
@@ -125,9 +129,10 @@ void RigUI::timerCallback()
 
 void RigUI::refreshAll()
 {
-    for (auto* p : std::initializer_list<PanelBase*> { gatePanel.get(), modPanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get(),
+    for (auto* p : std::initializer_list<PanelBase*> { gatePanel.get(), modPanel.get(), compPanel.get(), pedalPanel.get(), odPanel.get(), distPanel.get(),
                                                       ampPanel.get(), cabPanel.get(), delayPanel.get(), reverbPanel.get() })
         p->refresh();
+    patchBar->refresh();
     trimKnob->refresh(); masterKnob->refresh();
     inputBox.setSelectedId (engine.inputChannel->index(), juce::dontSendNotification);
     applyOrderFromEngine (isShowing());

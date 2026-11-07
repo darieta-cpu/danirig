@@ -17,10 +17,18 @@ public:
     MultiMod() : MonoModule ("mod", "MULTI MOD")
     {
         mode  = &addChoice ("mode", "Mode", { "Phase", "Chorus", "Tremolo" }, 0);
-        rate  = &addFloat ("rate", "Rate", 0.1f, 12.0f, 1.2f, " Hz", 2);
-        depth = &addFloat ("depth", "Depth", 0.0f, 10.0f, 5.0f, "", 1);
+        rate  = &addFloat ("rate", "Rate", 0.1f, 12.0f, 0.6f, " Hz", 2);
+        depth = &addFloat ("depth", "Depth", 0.0f, 10.0f, 6.0f, "", 1);
         level = &addFloat ("level", "Level", -12.0f, 12.0f, 0.0f, " dB", 1);
-        div   = &addChoice ("div", "Tap Div", { "Tap 1/2", "Tap 1/4", "Tap 1/8 dot", "Tap 1/8", "Tap 1/16" }, 1);
+        div   = &addChoice ("div", "Tap Div", { "Tap 1/2", "Tap 1/4", "Tap 1/8.", "Tap 1/8", "Tap 1/16" }, 1);
+    }
+
+    // Da chiamare dalla UI quando l'utente cambia modo: imposta rate/depth tipici del nuovo modo.
+    void applyModeDefaults()
+    {
+        static const float rates[] = { 0.6f, 0.9f, 4.5f }, depths[] = { 6.0f, 5.0f, 6.0f };
+        const int m = juce::jlimit (0, 2, mode->index());
+        rate->set (rates[m]); depth->set (depths[m]);
     }
 
     static float divMultiplier (int idx)
@@ -60,6 +68,7 @@ public:
         for (auto& s : ap) s = {};
         chorusLine.clear();
         bbd.reset();
+        fbState = 0.0f;
         phase = 0.0;
         rateSm = rate->get();
         levelSm = dbToGain (level->get());
@@ -69,7 +78,7 @@ public:
     void process (float* x, int n) override
     {
         const int m = mode->index();
-        if (m != lastMode) { lastMode = m; for (auto& s : ap) s = {}; chorusLine.clear(); bbd.reset(); modeFade = 0.0f; }
+        if (m != lastMode) { lastMode = m; for (auto& s : ap) s = {}; chorusLine.clear(); bbd.reset(); fbState = 0.0f; modeFade = 0.0f; }
         if (resync.exchange (false)) phase = 0.0;
 
         const float d = depth->get() * 0.1f;
@@ -96,10 +105,11 @@ public:
                         const float e = 0.5f + (l - 0.5f) * (0.2f + 0.8f * d);
                         const float f = 120.0f * std::pow (26.7f, e);
                         const float t = std::tan ((float) kPi * f / (float) sr);
-                        coefA = (1.0f - t) / (1.0f + t);
+                        coefA = (t - 1.0f) / (t + 1.0f);      // allpass del 1° ordine con frequenza di rottura f (90° a f)
                     }
-                    float v = in;
+                    float v = in + (0.1f + 0.4f * d) * fbState;   // un po' di rigenerazione, cresce con Depth
                     for (auto& s : ap) { const float out = coefA * v + s.x1 - coefA * s.y1; s.x1 = v; s.y1 = out; v = out; }
+                    fbState = v;
                     y = 0.5f * (in + v);
                     break;
                 }
@@ -114,8 +124,11 @@ public:
                 }
                 default:  // Tremolo: g = 1 sul "battere" (fase 0), scende fino a 1-depth
                 {
-                    const float g = 1.0f - d * (0.5f - 0.5f * std::cos ((float) (2.0 * kPi * phase)));
-                    y = in * g;
+                    // la profondità lavora in dB (l'orecchio è logaritmico): Depth 10 = -36 dB di dip. Onda sinusoidale
+                    // leggermente "squadrata" per un effetto più ritmico. Fase 0 = volume pieno (il tap cade sul battere).
+                    const float raw = 0.5f - 0.5f * std::cos ((float) (2.0 * kPi * phase));          // 0..1
+                    const float shaped = 0.5f + 0.5f * std::tanh (1.8f * (2.0f * raw - 1.0f)) / std::tanh (1.8f);
+                    y = in * std::exp (-d * 36.0f * shaped * 0.11512925f);
                     break;
                 }
             }
@@ -136,7 +149,8 @@ private:
     std::atomic<bool> resync { false };
     std::vector<double> taps;
     double sr = 48000, phase = 0.0;
-    float rateSm = 1.2f, levelSm = 1.0f, rateCoef = 0.001f, coefA = 0.5f, modeFade = 1.0f, fadeStep = 0.01f;
+    float fbState = 0.0f;
+    float rateSm = 0.6f, levelSm = 1.0f, rateCoef = 0.001f, coefA = 0.5f, modeFade = 1.0f, fadeStep = 0.01f;
     int lastMode = -1;
 };
 } // namespace dr

@@ -20,6 +20,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 UninstallDisplayIcon={app}\DaniRig.exe
+SetupIconFile=..\assets\icon.ico
 WizardStyle=modern
 
 [Types]

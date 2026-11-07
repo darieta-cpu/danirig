@@ -16,7 +16,7 @@ public:
     void resized() override;
     void refreshAll();
 
-    static constexpr int W = 1280, H = 800;
+    static constexpr int W = 1280, H = 890;
 
 private:
     class Content : public juce::Component
@@ -43,7 +43,8 @@ private:
 
     std::unique_ptr<ui::GatePanel> gatePanel;
     std::unique_ptr<ui::MultiModPanel> modPanel;
-    std::unique_ptr<ui::PedalPanel> odPanel, distPanel;
+    std::unique_ptr<ui::PedalPanel> odPanel, distPanel, compPanel;
+    std::unique_ptr<ui::PatchBar> patchBar;
     std::unique_ptr<ui::NamPedalPanel> pedalPanel;
     std::unique_ptr<ui::AmpPanel> ampPanel;
     std::unique_ptr<ui::CabPanel> cabPanel;

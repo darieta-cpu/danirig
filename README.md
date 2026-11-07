@@ -5,13 +5,14 @@ App **standalone** per chitarra live, Mac (universal: Apple Silicon + Intel) e W
 **Catena del segnale** (ogni blocco è un modulo con on/off, parametri e crossfade senza click):
 
 ```
-Ingresso → Noise Gate → **Multi Mod** → Overdrive (stile TS) → Distortion (stile DS-1) → **Pedale NAM** → Ampli NAM (A2) → Cabinet IR → Delay (tap) → Reverb → Uscita
+Ingresso → Noise Gate → **Compressor** → **Multi Mod** → Overdrive (stile TS) → Distortion (stile DS-1) → **Pedale NAM** → Ampli NAM (A2) → Cabinet IR → Delay (tap) → Reverb → Uscita
 ```
 
 | Modulo | Cosa fa |
 |---|---|
 | **Noise Gate** | Gate senza lookahead (zero latenza), soglia/release/range, isteresi e hold |
-| **Multi Mod** | Pedale multi-modulazione in stile TC Plethora X1 con tre modi: **Phase** (4 stadi allpass, stile Phase 90), **Chorus** (BBD mono, stile CE-2), **Tremolo**. Rate, Depth, Level e **tap tempo** con suddivisione (1/2, 1/4, 1/8 puntato, 1/8, 1/16): il tap imposta la frequenza dell'LFO e ne riallinea la fase. Parte spento |
+| **Compressor** | Compressore stile MXR Dyna Comp: **Sens** e **Output** (più Sens = più sustain, con make-up automatico parziale), attacco veloce, rilascio medio, ginocchio morbido. In più **Mix** per la compressione parallela (100 % = come il pedale). Zero latenza. Parte spento |
+| **Multi Mod** | Pedale multi-modulazione in stile TC Plethora X1 con tre modi: **Phase** (4 stadi allpass spazzolati, stile Phase 90, con un po' di rigenerazione che cresce con Depth), **Chorus** (BBD mono, stile CE-2), **Tremolo** (profondità in dB, onda sinusoidale leggermente "squadrata"). Cambiando modo, Rate e Depth si portano ai valori tipici di quel modo. Rate, Depth, Level e **tap tempo** con suddivisione (1/2, 1/4, 1/8 puntato, 1/8, 1/16): il tap imposta la frequenza dell'LFO e ne riallinea la fase. Parte spento |
 | **NAM Pedal** | Un secondo caricatore NAM, **davanti all'ampli**, per il profilo di un pedale reale (overdrive, boost, fuzz...). Gain/Output, auto-level, A2 Full/Lite, precedente/successivo nella cartella. Parte spento |
 | **Overdrive** | Modello analogico di uno stadio op-amp con diodi nel feedback + gobba sui medi, oversampling 4x |
 | **Distortion** | Booster a transistor + op-amp ad alto gain + clipping duro a diodi + tone "scoop", oversampling 4x |
@@ -20,7 +21,18 @@ Ingresso → Noise Gate → **Multi Mod** → Overdrive (stile TS) → Distortio
 | **Delay** | Tap tempo, suddivisioni (1/4, 1/8 puntato, 1/8, terzina), repeats, tone, mod, modo Digital/Analog, ping-pong |
 | **Reverb** | FDN a 8 linee con diffusione, damping, pre-delay, low cut, leggera modulazione |
 
-**Riordinare i moduli**: trascina un pedale dalla fascia alta del pannello (dove c'è la maniglia a puntini). Si riordinano liberamente i moduli *prima dell'ampli* (Gate, Multi Mod, NAM Pedal, Overdrive, Distortion) e quelli *dopo il cab* (Delay, Reverb). Ampli e cabinet restano al loro posto. Lo schema "SIGNAL CHAIN" mostra l'ordine reale; quando cambi ordine c'è un fade-in di 12 ms per evitare click.
+**Riordinare i moduli**: trascina un pedale dalla fascia alta del pannello (dove c'è la maniglia a puntini). Si riordinano liberamente i moduli *prima dell'ampli* (Gate, Compressor, Multi Mod, NAM Pedal, Overdrive, Distortion) e quelli *dopo il cab* (Delay, Reverb). Ampli e cabinet restano al loro posto. Lo schema "SIGNAL CHAIN" mostra l'ordine reale; quando cambi ordine c'è un fade-in di 12 ms per evitare click.
+
+## Patch e scene (i tre switch in basso)
+
+Nella fascia in basso ci sono tre switch a pedale (1-2-3) e un selettore **PATCH / SCENE**:
+
+- **PATCH**: ogni switch richiama uno stato *completo*: parametri, on/off, ordine dei moduli, modello NAM, pedale NAM e IR. Se due patch usano lo stesso modello/IR, questo non viene ricaricato.
+- **SCENE**: ogni switch richiama un'istantanea dei soli parametri e on/off *dentro al patch corrente* (come gli "snapshot" dei multieffetto): cambio istantaneo, nessun caricamento.
+- **SAVE** sotto ogni switch memorizza lo stato attuale in quello slot (nella modalità selezionata). Doppio click sul nome per rinominarlo. Il LED indica lo slot attivo. Gli slot vuoti si riconoscono dal nome "(empty)".
+- Le scene appartengono al patch in cui le salvi: cambiando patch, le tre scene cambiano con lui.
+- Patch e scene vengono salvati con le impostazioni, nei preset `.dprig` e nel progetto della DAW (plugin).
+- Un patch che non ha modello NAM o IR non scarica quelli già caricati: li lascia come sono.
 
 Le impostazioni (e l'ordine dei moduli, i percorsi di modelli e IR) vengono salvate all'uscita e ripristinate all'avvio. `SAVE`/`LOAD` salvano/caricano preset `.dprig`.
 
@@ -91,8 +103,9 @@ Source/
   plugin/                       PluginProcessor/Editor (VST3 e AU)
   ui/RigUI.*                    interfaccia completa (condivisa da app e plugin)
   RigEngine.*                   callback audio e catena di moduli (mono → stereo)
-  dsp/                          NoiseGate, MultiMod, Pedals (TS + DS-1), NamAmp, CabIR, Delay, Reverb,
+  dsp/                          NoiseGate, DynaComp, MultiMod, Pedals (TS + DS-1), NamAmp, CabIR, Delay, Reverb,
                                 Resampler, FracDelay, Biquad, Module/Param
+  assets/                       icona (make_icon.py la rigenera: icon_1024.png, icon_256.png, icon.ico)
   ui/                           Controls (manopole, footswitch, meter), Panels (un pannello per modulo)
 installer/DaniRig.iss           installer Windows (Inno Setup)
 ```
