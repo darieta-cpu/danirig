@@ -73,21 +73,23 @@ RigUI::RigUI (RigEngine& e, std::function<void()> audioSettings, std::function<d
         }
 
     // barra superiore
-    for (auto* b : { &audioBtn, &saveBtn, &loadBtn, &resetBtn }) content.addAndMakeVisible (*b);
-    audioBtn.setBounds (200, 18, 140, 30); saveBtn.setBounds (348, 18, 64, 30);
-    loadBtn.setBounds (418, 18, 64, 30);   resetBtn.setBounds (488, 18, 64, 30);
+    for (auto* b : { &audioBtn, &saveBtn, &loadBtn, &exportBtn, &resetBtn }) content.addAndMakeVisible (*b);
+    const int x0 = audioSettingsCb ? 326 : 200;
+    if (audioSettingsCb) audioBtn.setBounds (190, 18, 130, 30);
+    saveBtn.setBounds (x0, 18, 58, 30);        loadBtn.setBounds (x0 + 64, 18, 58, 30);
+    exportBtn.setBounds (x0 + 128, 18, 72, 30); resetBtn.setBounds (x0 + 206, 18, 58, 30);
     audioBtn.setVisible ((bool) audioSettingsCb);
     audioBtn.onClick = [this] { if (audioSettingsCb) audioSettingsCb(); };
     saveBtn.onClick  = [this] { savePreset(); };
     loadBtn.onClick  = [this] { loadPreset(); };
+    exportBtn.onClick = [this] { exportPreset(); };
     resetBtn.onClick = [this] { engine.resetAll(); refreshAll(); };
-    if (! audioSettingsCb) { saveBtn.setTopLeftPosition (200, 18); loadBtn.setTopLeftPosition (270, 18); resetBtn.setTopLeftPosition (340, 18); }
 
     for (int i = 1; i <= 8; ++i) inputBox.addItem ("Input " + juce::String (i), i);
     inputBox.setSelectedId (engine.inputChannel->index(), juce::dontSendNotification);
     inputBox.onChange = [this] { engine.inputChannel->set ((float) inputBox.getSelectedId()); };
     content.addAndMakeVisible (inputBox);
-    inputBox.setBounds (572, 18, 104, 30);
+    inputBox.setBounds (596, 18, 90, 30);
 
     trimKnob   = std::make_unique<Knob> (*engine.inputTrim, juce::Colour (0xffbfc3c9), juce::Colour (0xff111214), col::text);
     masterKnob = std::make_unique<Knob> (*engine.master,    juce::Colour (0xffbfc3c9), juce::Colour (0xff111214), col::text);
@@ -121,6 +123,7 @@ void RigUI::timerCallback()
     outMeter.setPeak (engine.outPeak.exchange (0.0f));
     engine.collectGarbage();
     if (cpuCb) flow->cpu = (float) cpuCb();
+    if (engine.hasWarnings.load()) showWarningsIfAny();
     if (engine.stateVersion.load() != lastStateVersion) { lastStateVersion = engine.stateVersion.load(); refreshAll(); }
     flow->repaint();
     gatePanel->repaint();
@@ -221,7 +224,47 @@ void RigUI::loadPreset()
                           {
                               auto f = fc.getResult();
                               if (! f.existsAsFile()) return;
-                              if (auto xml = juce::XmlDocument::parse (f)) { engine.loadState (*xml); refreshAll(); }
+                              if (auto xml = juce::XmlDocument::parse (f))
+                              {
+                                  RigEngine::resolveRelativePaths (*xml, f.getParentDirectory());   // preset esportati: percorsi relativi
+                                  engine.loadState (*xml);
+                                  refreshAll();
+                              }
                           });
+}
+
+void RigUI::exportPreset()
+{
+    chooser = std::make_unique<juce::FileChooser> ("Esporta preset con modelli e IR (crea una cartella con il nome scelto)",
+                                                   FileStepper::lastDir().getChildFile ("MioSuono.dprig"), "*.dprig");
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                          [this] (const juce::FileChooser& fc)
+                          {
+                              auto f = fc.getResult();
+                              if (f == juce::File()) return;
+                              juce::StringArray report;
+                              int nModels = 0, nIrs = 0;
+                              const auto res = engine.exportBundle (f.withFileExtension ("dprig"), report, nModels, nIrs);
+                              juce::String msg;
+                              if (res.failed()) msg = "Esportazione non riuscita: " + res.getErrorMessage();
+                              else
+                              {
+                                  msg = "Esportati " + juce::String (nModels) + " modelli NAM e " + juce::String (nIrs) + " IR in:\n"
+                                        + f.getParentDirectory().getChildFile (f.getFileNameWithoutExtension()).getFullPathName()
+                                        + "\n\nPer usare il preset su un altro computer copia l'intera cartella.";
+                                  if (report.size() > 0) msg += "\n\nAttenzione:\n" + report.joinIntoString ("\n");
+                              }
+                              juce::AlertWindow::showMessageBoxAsync (res.failed() || report.size() > 0 ? juce::MessageBoxIconType::WarningIcon : juce::MessageBoxIconType::InfoIcon,
+                                                                      "Esporta preset", msg);
+                          });
+}
+
+void RigUI::showWarningsIfAny()
+{
+    const auto w = engine.takeWarnings();
+    if (w.isEmpty()) return;
+    juce::AlertWindow::showMessageBoxAsync (juce::MessageBoxIconType::WarningIcon, "File non trovati",
+        "Questi file non sono stati trovati e non sono stati caricati:\n\n" + w.joinIntoString ("\n")
+        + "\n\nIl suono potrebbe non essere quello salvato. Carica di nuovo i file o ripristinali nella posizione originale.");
 }
 } // namespace dr

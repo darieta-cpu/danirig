@@ -91,9 +91,20 @@ public:
     void applySnapshot (const juce::XmlElement& snap);
     void resetAll();
     void sanitizeOrders();
+
+    // Preset portatili: i percorsi relativi (es. "models/amp.nam") si risolvono rispetto alla cartella del preset.
+    static void resolveRelativePaths (juce::XmlElement& xml, const juce::File& baseDir);
+    // Salva il preset corrente (con il banco) in <cartella>/<nome>/<nome>.dprig copiando modelli NAM e IR
+    // in models/ e ir/ e scrivendo percorsi relativi. report: avvisi (file non trovati, copie fallite).
+    juce::Result exportBundle (const juce::File& presetFile, juce::StringArray& report, int& numModels, int& numIrs) const;
+    // File che lo stato caricato non ha trovato (modelli NAM / IR). Svuota la lista. Thread messaggi.
+    juce::StringArray takeWarnings();
+    std::atomic<bool> hasWarnings { false };
     void collectGarbage() { amp.collectGarbage(); pedal.collectGarbage(); }   // thread messaggi
 
 private:
+    mutable juce::CriticalSection warnLock;
+    juce::StringArray warnings;
     std::atomic<uint32_t> preOrder { pack ({ 0, 5, 4, 2, 3, 1 }) };
     std::atomic<uint32_t> postOrder { pack ({ 0, 1 }) };
     struct PatchSlot

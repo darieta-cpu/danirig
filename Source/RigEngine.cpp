@@ -1,4 +1,5 @@
 #include "RigEngine.h"
+#include <map>
 
 namespace dr
 {
@@ -161,11 +162,81 @@ void RigEngine::loadState (const juce::XmlElement& xml)
     sanitizeOrders();
     // Si ricarica solo ciò che cambia: cambiando patch lo stesso modello/IR non viene ricaricato
     juce::File nam (xml.getStringAttribute ("namPath")), ir (xml.getStringAttribute ("irPath")), ped (xml.getStringAttribute ("pedalPath"));
+    {
+        juce::StringArray missing;
+        auto check = [&missing] (const juce::File& f, const char* what) { if (f.getFullPathName().isNotEmpty() && ! f.existsAsFile()) missing.add (juce::String (what) + ": " + f.getFullPathName()); };
+        check (nam, "Modello NAM (ampli)"); check (ped, "Modello NAM (pedale)"); check (ir, "IR cabinet");
+        if (missing.size() > 0) { juce::ScopedLock sl (warnLock); warnings.addArray (missing); hasWarnings.store (true); }
+    }
     if (nam.existsAsFile() && nam.getFullPathName() != amp.getModelPath())   amp.loadModelAsync (nam);
     if (ped.existsAsFile() && ped.getFullPathName() != pedal.getModelPath()) pedal.loadModelAsync (ped);
     if (ir.existsAsFile()  && ir.getFullPathName()  != cab.getIRPath())      cab.loadIR (ir);
     if (auto* bank = xml.getChildByName ("Bank")) loadBank (*bank);
     ++stateVersion;
+}
+
+juce::StringArray RigEngine::takeWarnings()
+{
+    juce::ScopedLock sl (warnLock);
+    juce::StringArray out;
+    for (auto& w : warnings) out.addIfNotAlreadyThere (w);
+    warnings.clear();
+    hasWarnings.store (false);
+    return out;
+}
+
+// Trasforma in assoluti i percorsi relativi (anche dentro ai patch del banco).
+void RigEngine::resolveRelativePaths (juce::XmlElement& xml, const juce::File& baseDir)
+{
+    if (xml.hasTagName ("DaniRigPreset"))
+        for (const char* attr : { "namPath", "pedalPath", "irPath" })
+        {
+            const auto p = xml.getStringAttribute (attr);
+            if (p.isNotEmpty() && ! juce::File::isAbsolutePath (p)) xml.setAttribute (attr, baseDir.getChildFile (p).getFullPathName());
+        }
+    for (auto* child : xml.getChildIterator()) resolveRelativePaths (*child, baseDir);
+}
+
+juce::Result RigEngine::exportBundle (const juce::File& presetFile, juce::StringArray& report, int& numModels, int& numIrs) const
+{
+    numModels = numIrs = 0;
+    const auto base = presetFile.getFileNameWithoutExtension();
+    const auto dir = presetFile.getParentDirectory().getChildFile (base);
+    if (! dir.createDirectory()) return juce::Result::fail ("Impossibile creare la cartella " + dir.getFullPathName());
+
+    auto xml = saveState (true);
+    std::map<juce::String, juce::String> done;     // percorso assoluto -> percorso relativo nell'export
+
+    auto handle = [&] (juce::XmlElement& st)
+    {
+        struct Item { const char* attr; const char* sub; };
+        for (auto item : { Item { "namPath", "models" }, Item { "pedalPath", "models" }, Item { "irPath", "ir" } })
+        {
+            const auto p = st.getStringAttribute (item.attr);
+            if (p.isEmpty()) continue;
+            if (auto it = done.find (p); it != done.end()) { st.setAttribute (item.attr, it->second); continue; }
+            const juce::File src (p);
+            if (! src.existsAsFile()) { report.add ("File non trovato, non copiato: " + p); continue; }
+            auto subDir = dir.getChildFile (item.sub);
+            subDir.createDirectory();
+            auto target = subDir.getChildFile (src.getFileName());
+            for (int n = 2; target.exists() && ! src.hasIdenticalContentTo (target); ++n)
+                target = subDir.getChildFile (src.getFileNameWithoutExtension() + "_" + juce::String (n) + src.getFileExtension());
+            if (! target.exists() && ! src.copyFileTo (target)) { report.add ("Copia non riuscita: " + p); continue; }
+            const auto rel = juce::String (item.sub) + "/" + target.getFileName();
+            done[p] = rel;
+            st.setAttribute (item.attr, rel);
+            if (juce::String (item.sub) == "ir") ++numIrs; else ++numModels;
+        }
+    };
+
+    handle (*xml);
+    if (auto* bank = xml->getChildByName ("Bank"))
+        for (auto* pe : bank->getChildWithTagNameIterator ("Patch"))
+            if (auto* st = pe->getChildByName ("DaniRigPreset")) handle (*st);
+
+    if (! xml->writeTo (dir.getChildFile (base + ".dprig"))) return juce::Result::fail ("Impossibile scrivere il file .dprig");
+    return juce::Result::ok();
 }
 
 // ------------------------------------------------------------------------------------------------

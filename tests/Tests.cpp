@@ -343,6 +343,47 @@ int main (int argc, char** argv)
         CHECK (e2.recallSlot (false, 0) && std::abs (e2.od.find ("drive")->get() - 8.0f) < 1e-4f, "e anche il patch");
     }
 
+    std::printf ("[Preset portatili: esporta con i file, percorsi relativi, file mancanti]\n");
+    {
+        auto tmp = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("danirig_export_test");
+        tmp.deleteRecursively(); tmp.createDirectory();
+        auto srcA = tmp.getChildFile ("srcA"), srcB = tmp.getChildFile ("srcB"); srcA.createDirectory(); srcB.createDirectory();
+        srcA.getChildFile ("amp.nam").replaceWithText ("{\"finto\":1}");
+        srcB.getChildFile ("amp.nam").replaceWithText ("{\"altro\":2}");           // stesso nome, contenuto diverso
+        srcA.getChildFile ("cab.wav").replaceWithText ("RIFFfinto");
+        RigEngine e;
+        e.amp.loadModelAsync (srcA.getChildFile ("amp.nam"));
+        e.pedal.loadModelAsync (srcB.getChildFile ("amp.nam"));
+        e.cab.loadIR (srcA.getChildFile ("cab.wav"));
+        e.od.find ("drive")->set (7.0f); e.storeSlot (false, 0);
+        juce::StringArray report; int nm = 0, ni = 0;
+        const auto res = e.exportBundle (tmp.getChildFile ("out/MioSuono.dprig"), report, nm, ni);
+        CHECK (res.wasOk() && report.isEmpty(), "export riuscito, nessun avviso");
+        auto dir = tmp.getChildFile ("out/MioSuono");
+        CHECK (dir.getChildFile ("MioSuono.dprig").existsAsFile(), "creato MioSuono/MioSuono.dprig");
+        CHECK (nm == 2 && ni == 1, "copiati 2 modelli (stesso nome, contenuto diverso) e 1 IR");
+        CHECK (dir.getChildFile ("models/amp.nam").existsAsFile() && dir.getChildFile ("models/amp_2.nam").existsAsFile(), "collisione di nomi risolta (amp.nam, amp_2.nam)");
+        auto xml = juce::XmlDocument::parse (dir.getChildFile ("MioSuono.dprig"));
+        CHECK (xml != nullptr && xml->getStringAttribute ("irPath") == "ir/cab.wav" && ! juce::File::isAbsolutePath (xml->getStringAttribute ("namPath")), "il .dprig contiene percorsi relativi");
+        // copia l'intera cartella altrove, cancella i sorgenti, ricarica
+        auto moved = tmp.getChildFile ("altro_pc/MioSuono"); dir.copyDirectoryTo (moved);
+        srcA.deleteRecursively(); srcB.deleteRecursively(); dir.deleteRecursively();
+        auto xml2 = juce::XmlDocument::parse (moved.getChildFile ("MioSuono.dprig"));
+        RigEngine::resolveRelativePaths (*xml2, moved);
+        RigEngine e2; e2.loadState (*xml2);
+        CHECK (e2.amp.getModelPath() == moved.getChildFile ("models/amp.nam").getFullPathName() && e2.cab.getIRPath() == moved.getChildFile ("ir/cab.wav").getFullPathName(), "ricarico da un'altra cartella: i percorsi puntano ai file copiati");
+        CHECK (! e2.hasWarnings.load(), "nessun avviso: i file ci sono");
+        // il patch salvato nel banco usa a sua volta i percorsi risolti
+        CHECK (e2.recallSlot (false, 0) && std::abs (e2.od.find ("drive")->get() - 7.0f) < 1e-4f && ! e2.hasWarnings.load(), "il patch del banco ritrova i suoi file");
+        // file mancante -> avviso con il nome
+        moved.getChildFile ("models/amp.nam").deleteFile();
+        RigEngine e3; e3.loadState (*xml2);
+        const auto w = e3.takeWarnings();
+        std::printf ("       avvisi: %s\n", w.joinIntoString (" | ").toRawUTF8());
+        CHECK (e3.hasWarnings.load() == false && w.size() >= 1 && w.joinIntoString ("").contains ("amp.nam"), "file mancante: avviso con il percorso");
+        tmp.deleteRecursively();
+    }
+
     std::printf ("[Ordine moduli + pedale NAM]\n");
     {
         RigEngine e;

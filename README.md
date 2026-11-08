@@ -34,6 +34,13 @@ Nella fascia in basso ci sono tre switch a pedale (1-2-3) e un selettore **PATCH
 - Patch e scene vengono salvati con le impostazioni, nei preset `.dprig` e nel progetto della DAW (plugin).
 - Un patch che non ha modello NAM o IR non scarica quelli già caricati: li lascia come sono.
 
+## Preset portatili (EXPORT) e file mancanti
+
+- **SAVE** salva il preset `.dprig` con i *percorsi assoluti* dei file: va bene sullo stesso computer, ma se sposti o rinomini i file non vengono ritrovati.
+- **EXPORT** crea una cartella con il nome che scegli (es. `MioSuono/`) con dentro `MioSuono.dprig`, `models/` (i `.nam` dell'ampli e del pedale, compresi quelli usati dai patch del banco) e `ir/` (le IR), con percorsi **relativi**. Copia l'intera cartella dove vuoi (un altro computer, un backup, un amico) e carica il `.dprig` con **LOAD**: i file vengono ritrovati accanto al preset. Due file con lo stesso nome ma contenuto diverso vengono rinominati (`amp.nam`, `amp_2.nam`).
+- **LOAD** accetta sia preset normali sia preset esportati.
+- Se al caricamento (di un preset, di un patch, dell'ultimo stato all'avvio o di un progetto della DAW) manca un modello NAM o un'IR, compare un messaggio con il percorso del file mancante; gli altri parametri vengono caricati comunque e il modello già presente resta com'è.
+
 Le impostazioni (e l'ordine dei moduli, i percorsi di modelli e IR) vengono salvate all'uscita e ripristinate all'avvio. `SAVE`/`LOAD` salvano/caricano preset `.dprig`.
 
 ## Plugin (VST3 e AU)

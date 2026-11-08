@@ -34,6 +34,8 @@ private:
     void pushOrderToEngine();
     void savePreset();
     void loadPreset();
+    void exportPreset();
+    void showWarningsIfAny();
 
     RigEngine& engine;
     std::function<void()> audioSettingsCb;
@@ -53,7 +55,7 @@ private:
     std::unique_ptr<ui::FlowPanel> flow;
     Group preGroup, postGroup;
 
-    juce::TextButton audioBtn { "AUDIO SETTINGS" }, saveBtn { "SAVE" }, loadBtn { "LOAD" }, resetBtn { "RESET" };
+    juce::TextButton audioBtn { "AUDIO SETTINGS" }, saveBtn { "SAVE" }, loadBtn { "LOAD" }, exportBtn { "EXPORT" }, resetBtn { "RESET" };
     juce::ComboBox inputBox;
     std::unique_ptr<ui::Knob> trimKnob, masterKnob;
     ui::LevelMeter inMeter, outMeter;
