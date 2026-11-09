@@ -652,14 +652,63 @@ private:
     int num;
 };
 
+// Display LCD: numero banco-patch in grande, nome del patch e della scena
+class LcdDisplay : public juce::Component
+{
+public:
+    explicit LcdDisplay (RigEngine& e) : engine (e) {}
+
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat().reduced (1.0f);
+        g.setColour (juce::Colour (0xff050806)); g.fillRoundedRectangle (r, 7.0f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff0f2414), 0, r.getY() + 2, juce::Colour (0xff08150b), 0, r.getBottom() - 2, false));
+        g.fillRoundedRectangle (r.reduced (3.0f), 5.0f);
+        g.setColour (juce::Colour (0xff2c3a30)); g.drawRoundedRectangle (r, 7.0f, 1.5f);
+
+        const auto lcd = juce::Colour (0xff8dff9c), lcdDim = lcd.withAlpha (0.42f);
+        const auto label = engine.loadedLabel();
+        const bool loaded = label != "--";
+        auto inner = getLocalBounds().reduced (10, 6);
+
+        auto left = inner.removeFromLeft (92);
+        g.setColour (lcdDim); g.setFont (uiFont (9.5f, true));
+        g.drawText ("BANK-PATCH", left.removeFromTop (12), juce::Justification::centredLeft);
+        g.setColour (loaded ? lcd : lcdDim);
+        g.setFont (juce::Font (juce::FontOptions (40.0f, juce::Font::bold)));
+        g.drawText (label, left, juce::Justification::centredLeft);
+
+        inner.removeFromLeft (6);
+        g.setColour (lcdDim.withAlpha (0.25f)); g.drawVerticalLine (inner.getX() - 3, (float) inner.getY() + 2, (float) inner.getBottom() - 2);
+        auto top = inner.removeFromTop (inner.getHeight() * 11 / 20);
+        g.setColour (lcdDim); g.setFont (uiFont (9.5f, true));
+        g.drawText (engine.sceneMode ? "PATCH / SCENE" : "PATCH", top.removeFromTop (12), juce::Justification::centredLeft);
+        g.setColour (loaded ? lcd : lcdDim);
+        g.setFont (uiFont (19.0f, true));
+        g.drawFittedText (loaded ? engine.loadedPatchName() : juce::String ("(no patch)"), top, juce::Justification::centredLeft, 1);
+
+        const auto sceneName = engine.loadedSceneName();
+        g.setColour (sceneName.isNotEmpty() ? lcd.withAlpha (0.85f) : lcdDim);
+        g.setFont (uiFont (13.0f, true));
+        g.drawFittedText (sceneName.isNotEmpty() ? "S" + juce::String (engine.currentScene + 1) + "  " + sceneName : juce::String ("- scene -"),
+                          inner, juce::Justification::centredLeft, 1);
+    }
+private:
+    RigEngine& engine;
+};
+
 class PatchBar : public juce::Component
 {
 public:
-    explicit PatchBar (RigEngine& e) : engine (e)
+    explicit PatchBar (RigEngine& e) : engine (e), lcd (e)
     {
-        for (auto* b : { &patchBtn, &sceneBtn }) { addAndMakeVisible (*b); }
+        addAndMakeVisible (lcd);
+        for (auto* b : { &patchBtn, &sceneBtn, &bankDown, &bankUp }) addAndMakeVisible (*b);
+        bankDown.setButtonText ("<"); bankUp.setButtonText (">");
         patchBtn.onClick = [this] { engine.sceneMode = false; refresh(); };
         sceneBtn.onClick = [this] { engine.sceneMode = true;  refresh(); };
+        bankDown.onClick = [this] { engine.viewBank = (engine.viewBank + RigEngine::kBanks - 1) % RigEngine::kBanks; engine.sceneMode = false; refresh(); };
+        bankUp.onClick   = [this] { engine.viewBank = (engine.viewBank + 1) % RigEngine::kBanks; engine.sceneMode = false; refresh(); };
         for (int i = 0; i < 3; ++i)
         {
             sw[i] = std::make_unique<SlotSwitch> (i + 1);
@@ -675,7 +724,7 @@ public:
             names[i].setColour (juce::Label::textWhenEditingColourId, juce::Colours::white);
             names[i].setColour (juce::Label::backgroundWhenEditingColourId, juce::Colour (0xff0b0d0f));
             names[i].setJustificationType (juce::Justification::centredLeft);
-            names[i].onTextChange = [this, i] { engine.setSlotName (engine.sceneMode, i, names[i].getText()); };
+            names[i].onTextChange = [this, i] { engine.setSlotName (engine.sceneMode, i, names[i].getText()); refresh(); };
             addAndMakeVisible (names[i]);
         }
         refresh();
@@ -688,7 +737,8 @@ public:
         const bool sc = engine.sceneMode;
         patchBtn.setColour (juce::TextButton::buttonColourId, sc ? juce::Colour (0xff2a2d33) : juce::Colour (0xff8a6d20));
         sceneBtn.setColour (juce::TextButton::buttonColourId, sc ? juce::Colour (0xff8a6d20) : juce::Colour (0xff2a2d33));
-        const int cur = sc ? engine.currentScene : engine.currentPatch;
+        const bool onLoadedBank = engine.viewBank == engine.currentBank;
+        const int cur = sc ? engine.currentScene : (onLoadedBank ? engine.currentPatch : -1);
         for (int i = 0; i < 3; ++i)
         {
             const bool filled = engine.hasSlot (sc, i);
@@ -697,6 +747,7 @@ public:
             names[i].setText (flashing == i ? juce::String ("SAVED!") : filled ? engine.slotName (sc, i) : juce::String ("(empty)"), juce::dontSendNotification);
             names[i].setColour (juce::Label::textColourId, filled ? col::text : col::dim);
         }
+        lcd.repaint();
         repaint();
     }
 
@@ -706,24 +757,40 @@ public:
         g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1d2024), 0, r.getY(), juce::Colour (0xff0e1012), 0, r.getBottom(), false));
         g.fillRoundedRectangle (r, 10.0f);
         g.setColour (col::gold.withAlpha (0.45f)); g.drawRoundedRectangle (r, 10.0f, 1.2f);
-        g.setColour (col::gold); g.setFont (uiFont (12.0f, true));
-        g.drawText ("FOOTSWITCH MODE", 20, 8, 170, 16, juce::Justification::centredLeft);
+
+        // selettore di banco: "BANK n" + 5 puntini (pieno = banco con patch, anello verde = banco del patch caricato)
+        g.setColour (col::gold); g.setFont (uiFont (13.0f, true));
+        g.drawText ("BANK " + juce::String (engine.viewBank + 1), bankLabelArea, juce::Justification::centred);
+        const float dotY = (float) bankLabelArea.getBottom() + 5.0f, x0 = (float) bankLabelArea.getCentreX() - 2.0f * 11.0f;
+        for (int b = 0; b < RigEngine::kBanks; ++b)
+        {
+            const float cx = x0 + (float) b * 11.0f;
+            const bool isView = b == engine.viewBank, has = engine.bankHasPatches (b);
+            g.setColour (isView ? col::gold : has ? juce::Colour (0xff8a8f96) : juce::Colour (0xff35383d));
+            g.fillEllipse (cx - (isView ? 4.0f : 3.0f), dotY - (isView ? 4.0f : 3.0f), isView ? 8.0f : 6.0f, isView ? 8.0f : 6.0f);
+            if (b == engine.currentBank) { g.setColour (col::ledGreen); g.drawEllipse (cx - 5.5f, dotY - 5.5f, 11.0f, 11.0f, 1.2f); }
+        }
         g.setColour (col::dim); g.setFont (uiFont (10.5f));
-        g.drawText (engine.sceneMode ? "SCENE: parametri e on/off dentro al patch corrente (cambio istantaneo)"
-                                     : "PATCH: stato completo (modelli, IR, ordine dei moduli, parametri)",
-                    juce::Rectangle<int> (20, 58, 280, 30), juce::Justification::topLeft, true);
+        g.drawText (engine.sceneMode ? "SCENE: parametri e on/off nel patch caricato"
+                                     : "PATCH: stato completo (modelli, IR, ordine, parametri)",
+                    juce::Rectangle<int> (modeArea.getX(), modeArea.getBottom() + 3, 230, 14), juce::Justification::centredLeft, false);
     }
 
     void resized() override
     {
-        patchBtn.setBounds (20, 26, 84, 28);
-        sceneBtn.setBounds (110, 26, 84, 28);
+        lcd.setBounds (12, 8, 280, 76);
+        bankDown.setBounds (304, 8, 30, 28);
+        bankLabelArea = juce::Rectangle<int> (336, 6, 66, 30);
+        bankUp.setBounds (404, 8, 30, 28);
+        modeArea = juce::Rectangle<int> (304, 48, 130, 24);
+        patchBtn.setBounds (304, 48, 63, 24);
+        sceneBtn.setBounds (371, 48, 63, 24);
         for (int i = 0; i < 3; ++i)
         {
-            const int x = 330 + i * 300;
-            sw[i]->setBounds (x, 4, 72, 84);
-            names[i].setBounds (x + 82, 14, 170, 28);
-            save[i].setBounds (x + 82, 50, 64, 26);
+            const int x = 462 + i * 258;
+            sw[i]->setBounds (x, 4, 66, 84);
+            names[i].setBounds (x + 72, 14, 170, 28);
+            save[i].setBounds (x + 72, 50, 62, 26);
         }
     }
 
@@ -736,10 +803,12 @@ private:
     }
 
     RigEngine& engine;
-    juce::TextButton patchBtn { "PATCH" }, sceneBtn { "SCENE" };
+    LcdDisplay lcd;
+    juce::TextButton patchBtn { "PATCH" }, sceneBtn { "SCENE" }, bankDown, bankUp;
     std::unique_ptr<SlotSwitch> sw[3];
     juce::TextButton save[3];
     juce::Label names[3];
+    juce::Rectangle<int> bankLabelArea, modeArea;
     int flashing = -1;
 };
 } // namespace dr::ui

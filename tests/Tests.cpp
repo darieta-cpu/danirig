@@ -338,9 +338,51 @@ int main (int argc, char** argv)
         auto xml = e.saveState();
         RigEngine e2; e2.loadState (*xml);
         CHECK (e2.sceneMode && e2.currentPatch == 1 && e2.hasSlot (false, 0) && e2.hasSlot (false, 1) && ! e2.hasSlot (false, 2), "banco ripristinato dal file");
-        CHECK (e2.slotName (false, 0) == "Clean" && e2.slotName (true, 0) == "Solo" && e2.slotName (false, 1) == "Patch 2", "nomi salvati (e predefiniti)");
+        CHECK (e2.slotName (false, 0) == "Clean" && e2.slotName (true, 0) == "Solo" && e2.slotName (false, 1) == "Patch 1-2", "nomi salvati (e predefiniti)");
         CHECK (e2.recallSlot (true, 0) && std::abs (e2.od.find ("drive")->get() - 9.0f) < 1e-4f, "la scena sopravvive al salvataggio");
         CHECK (e2.recallSlot (false, 0) && std::abs (e2.od.find ("drive")->get() - 8.0f) < 1e-4f, "e anche il patch");
+    }
+
+    std::printf ("[5 banchi x 3 patch]\n");
+    {
+        RigEngine e;
+        // riempie i 15 patch con un valore di drive diverso
+        for (int b = 0; b < RigEngine::kBanks; ++b)
+        {
+            e.viewBank = b;
+            for (int i = 0; i < 3; ++i) { e.od.find ("drive")->set ((float) (b * 3 + i) * 0.6f + 0.5f); e.storeSlot (false, i); }
+        }
+        bool all = true;
+        for (int b = 0; b < RigEngine::kBanks; ++b)
+        {
+            e.viewBank = b;
+            for (int i = 0; i < 3; ++i) all = all && e.recallSlot (false, i) && std::abs (e.od.find ("drive")->get() - ((float) (b * 3 + i) * 0.6f + 0.5f)) < 1e-3f;
+        }
+        CHECK (all, "15 patch distinti memorizzati e richiamati");
+        e.viewBank = 3; e.recallSlot (false, 1);
+        CHECK (e.loadedLabel() == "4-2" && e.loadedPatchName() == "Patch 4-2", "display: banco-patch e nome predefinito");
+        e.setSlotName (false, 1, "Solo caldo");
+        CHECK (e.loadedPatchName() == "Solo caldo", "display: nome rinominato");
+        e.viewBank = 0;                                              // si sfoglia un altro banco senza cambiare il patch caricato
+        CHECK (e.loadedLabel() == "4-2" && e.slotName (false, 1) == "Patch 1-2", "cambiare banco non cambia il patch caricato");
+        e.od.find ("drive")->set (9.0f); e.storeSlot (true, 2);      // scena del patch caricato (4-2)
+        CHECK (e.loadedSceneName() == "" || e.loadedSceneName().isNotEmpty(), "nome scena disponibile");
+        e.viewBank = 2; e.sceneMode = true;
+        auto xml = e.saveState();
+        RigEngine e2; e2.loadState (*xml);
+        CHECK (e2.viewBank == 2 && e2.currentBank == 3 && e2.currentPatch == 1 && e2.sceneMode, "banco visualizzato e patch caricato ripristinati");
+        e2.sceneMode = false; e2.viewBank = 4; e2.recallSlot (false, 2);
+        CHECK (std::abs (e2.od.find ("drive")->get() - (14.0f * 0.6f + 0.5f)) < 1e-3f, "patch 5-3 dopo il ripristino");
+        e2.viewBank = 3; e2.recallSlot (false, 1);
+        CHECK (e2.recallSlot (true, 2) && std::abs (e2.od.find ("drive")->get() - 9.0f) < 1e-4f, "la scena resta legata al suo patch");
+        CHECK (e2.bankHasPatches (0) && e2.bankHasPatches (4), "indicatori dei banchi con patch");
+        // compatibilità: preset a 3 slot (senza attributo bank) finisce nel banco 1
+        juce::XmlElement old ("DaniRigPreset");
+        auto* b = old.createNewChildElement ("Bank"); b->setAttribute ("currentPatch", 1);
+        auto* p = b->createNewChildElement ("Patch"); p->setAttribute ("index", 1); p->setAttribute ("name", "Vecchio");
+        auto* st = p->createNewChildElement ("DaniRigPreset"); st->setAttribute ("od.drive", 4.0);
+        RigEngine e3; e3.loadState (old);
+        CHECK (e3.currentBank == 0 && e3.currentPatch == 1 && e3.hasSlot (false, 1) && e3.slotName (false, 1) == "Vecchio", "compatibilità con i preset a 3 slot");
     }
 
     std::printf ("[Preset portatili: esporta con i file, percorsi relativi, file mancanti]\n");

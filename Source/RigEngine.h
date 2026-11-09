@@ -75,18 +75,24 @@ public:
     std::unique_ptr<juce::XmlElement> saveState (bool includeBank = true) const;
     void loadState (const juce::XmlElement& xml);
 
-    // Banco patch/scene (solo thread messaggi).
+    // Banco patch/scene (solo thread messaggi): 5 banchi x 3 patch = 15 patch, ognuno con 3 scene.
     //  - PATCH: stato completo (parametri, ordine dei moduli, modello NAM, pedale NAM, IR).
-    //  - SCENE: istantanea dei soli parametri dei moduli (on/off inclusi) dentro il patch corrente: cambio istantaneo,
+    //  - SCENE: istantanea dei soli parametri dei moduli (on/off inclusi) dentro il patch caricato: cambio istantaneo,
     //           senza ricaricare modelli.
-    static constexpr int kSlots = 3;
+    // I tre switch lavorano sul banco "visualizzato" (viewBank); il patch caricato è (currentBank, currentPatch).
+    static constexpr int kSlots = 3, kBanks = 5;
     bool sceneMode = false;
-    int currentPatch = -1, currentScene = -1;
+    int viewBank = 0;
+    int currentBank = -1, currentPatch = -1, currentScene = -1;
     bool hasSlot (bool scene, int i) const;
+    bool bankHasPatches (int bank) const;
     juce::String slotName (bool scene, int i) const;
     void setSlotName (bool scene, int i, const juce::String& name);
     void storeSlot (bool scene, int i);
     bool recallSlot (bool scene, int i);
+    juce::String loadedLabel() const;          // "2-3" (banco-patch) oppure "--"
+    juce::String loadedPatchName() const;
+    juce::String loadedSceneName() const;
     std::unique_ptr<juce::XmlElement> saveSnapshot() const;      // solo parametri dei moduli
     void applySnapshot (const juce::XmlElement& snap);
     void resetAll();
@@ -113,8 +119,9 @@ private:
         juce::String name;
         std::unique_ptr<juce::XmlElement> scene[kSlots];
         juce::String sceneName[kSlots];
-    } patches[kSlots];
-    int sceneOwner() const { return currentPatch >= 0 ? currentPatch : 0; }
+    } patches[kBanks][kSlots];
+    int ownerBank() const { return currentBank >= 0 ? currentBank : 0; }     // le scene appartengono al patch caricato
+    int ownerSlot() const { return currentPatch >= 0 ? currentPatch : 0; }
     void loadBank (const juce::XmlElement& bank);
     std::unique_ptr<juce::XmlElement> saveBank() const;
 

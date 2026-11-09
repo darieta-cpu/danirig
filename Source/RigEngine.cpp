@@ -263,81 +263,122 @@ void RigEngine::applySnapshot (const juce::XmlElement& snap)
 bool RigEngine::hasSlot (bool scene, int i) const
 {
     if (i < 0 || i >= kSlots) return false;
-    return scene ? patches[sceneOwner()].scene[i] != nullptr : patches[i].state != nullptr;
+    return scene ? patches[ownerBank()][ownerSlot()].scene[i] != nullptr : patches[viewBank][i].state != nullptr;
+}
+
+bool RigEngine::bankHasPatches (int bank) const
+{
+    if (bank < 0 || bank >= kBanks) return false;
+    for (auto& p : patches[bank]) if (p.state) return true;
+    return false;
 }
 
 juce::String RigEngine::slotName (bool scene, int i) const
 {
     if (i < 0 || i >= kSlots) return {};
-    const auto n = scene ? patches[sceneOwner()].sceneName[i] : patches[i].name;
-    return n.isNotEmpty() ? n : (scene ? "Scene " : "Patch ") + juce::String (i + 1);
+    const auto n = scene ? patches[ownerBank()][ownerSlot()].sceneName[i] : patches[viewBank][i].name;
+    if (n.isNotEmpty()) return n;
+    return scene ? "Scene " + juce::String (i + 1) : "Patch " + juce::String (viewBank + 1) + "-" + juce::String (i + 1);
 }
 
 void RigEngine::setSlotName (bool scene, int i, const juce::String& name)
 {
     if (i < 0 || i >= kSlots) return;
-    (scene ? patches[sceneOwner()].sceneName[i] : patches[i].name) = name.trim();
+    (scene ? patches[ownerBank()][ownerSlot()].sceneName[i] : patches[viewBank][i].name) = name.trim();
 }
 
 void RigEngine::storeSlot (bool scene, int i)
 {
     if (i < 0 || i >= kSlots) return;
-    if (scene) { patches[sceneOwner()].scene[i] = saveSnapshot(); currentScene = i; }
-    else       { patches[i].state = saveState (false); currentPatch = i; }
+    if (scene) { patches[ownerBank()][ownerSlot()].scene[i] = saveSnapshot(); currentScene = i; }
+    else       { patches[viewBank][i].state = saveState (false); currentBank = viewBank; currentPatch = i; }
 }
 
 bool RigEngine::recallSlot (bool scene, int i)
 {
     if (! hasSlot (scene, i)) return false;
-    if (scene) { applySnapshot (*patches[sceneOwner()].scene[i]); currentScene = i; }
-    else       { loadState (*patches[i].state); currentPatch = i; currentScene = -1; }
+    if (scene) { applySnapshot (*patches[ownerBank()][ownerSlot()].scene[i]); currentScene = i; }
+    else       { loadState (*patches[viewBank][i].state); currentBank = viewBank; currentPatch = i; currentScene = -1; }
     return true;
+}
+
+juce::String RigEngine::loadedLabel() const
+{
+    return currentBank >= 0 && currentPatch >= 0 ? juce::String (currentBank + 1) + "-" + juce::String (currentPatch + 1) : juce::String ("--");
+}
+
+juce::String RigEngine::loadedPatchName() const
+{
+    if (currentBank < 0 || currentPatch < 0) return {};
+    const auto& n = patches[currentBank][currentPatch].name;
+    return n.isNotEmpty() ? n : "Patch " + juce::String (currentBank + 1) + "-" + juce::String (currentPatch + 1);
+}
+
+juce::String RigEngine::loadedSceneName() const
+{
+    if (currentScene < 0 || currentScene >= kSlots) return {};
+    const auto& n = patches[ownerBank()][ownerSlot()].sceneName[currentScene];
+    return n.isNotEmpty() ? n : "Scene " + juce::String (currentScene + 1);
 }
 
 std::unique_ptr<juce::XmlElement> RigEngine::saveBank() const
 {
     auto bank = std::make_unique<juce::XmlElement> ("Bank");
     bank->setAttribute ("sceneMode", sceneMode ? 1 : 0);
+    bank->setAttribute ("viewBank", viewBank);
+    bank->setAttribute ("currentBank", currentBank);
     bank->setAttribute ("currentPatch", currentPatch);
     bank->setAttribute ("currentScene", currentScene);
-    for (int i = 0; i < kSlots; ++i)
-    {
-        auto* p = bank->createNewChildElement ("Patch");
-        p->setAttribute ("index", i);
-        p->setAttribute ("name", patches[i].name);
-        if (patches[i].state) p->addChildElement (new juce::XmlElement (*patches[i].state));
-        for (int k = 0; k < kSlots; ++k)
-            if (patches[i].scene[k])
-            {
-                auto* sc = new juce::XmlElement (*patches[i].scene[k]);
-                sc->setTagName ("Scene");
-                sc->setAttribute ("index", k);
-                sc->setAttribute ("sceneName", patches[i].sceneName[k]);
-                p->addChildElement (sc);
-            }
-    }
+    for (int b = 0; b < kBanks; ++b)
+        for (int i = 0; i < kSlots; ++i)
+        {
+            const auto& ps = patches[b][i];
+            bool any = ps.state != nullptr || ps.name.isNotEmpty();
+            for (int k = 0; k < kSlots; ++k) any = any || ps.scene[k] != nullptr;
+            if (! any) continue;
+            auto* p = bank->createNewChildElement ("Patch");
+            p->setAttribute ("bank", b);
+            p->setAttribute ("index", i);
+            p->setAttribute ("name", ps.name);
+            if (ps.state) p->addChildElement (new juce::XmlElement (*ps.state));
+            for (int k = 0; k < kSlots; ++k)
+                if (ps.scene[k])
+                {
+                    auto* sc = new juce::XmlElement (*ps.scene[k]);
+                    sc->setTagName ("Scene");
+                    sc->setAttribute ("index", k);
+                    sc->setAttribute ("sceneName", ps.sceneName[k]);
+                    p->addChildElement (sc);
+                }
+        }
     return bank;
 }
 
 void RigEngine::loadBank (const juce::XmlElement& bank)
 {
     sceneMode = bank.getIntAttribute ("sceneMode") != 0;
+    viewBank = juce::jlimit (0, kBanks - 1, bank.getIntAttribute ("viewBank", 0));
     currentPatch = juce::jlimit (-1, kSlots - 1, bank.getIntAttribute ("currentPatch", -1));
+    // preset salvati con la versione a 3 slot non hanno "currentBank": erano nel banco 1
+    currentBank = juce::jlimit (-1, kBanks - 1, bank.getIntAttribute ("currentBank", currentPatch >= 0 ? 0 : -1));
+    if (currentBank < 0) currentPatch = -1;
     currentScene = juce::jlimit (-1, kSlots - 1, bank.getIntAttribute ("currentScene", -1));
-    for (auto& p : patches) { p.state.reset(); p.name = {}; for (int k = 0; k < kSlots; ++k) { p.scene[k].reset(); p.sceneName[k] = {}; } }
+    for (auto& row : patches)
+        for (auto& p : row) { p.state.reset(); p.name = {}; for (int k = 0; k < kSlots; ++k) { p.scene[k].reset(); p.sceneName[k] = {}; } }
     for (auto* pe : bank.getChildWithTagNameIterator ("Patch"))
     {
-        const int i = pe->getIntAttribute ("index", -1);
-        if (i < 0 || i >= kSlots) continue;
-        patches[i].name = pe->getStringAttribute ("name");
-        if (auto* st = pe->getChildByName ("DaniRigPreset")) patches[i].state = std::make_unique<juce::XmlElement> (*st);
+        const int b = pe->getIntAttribute ("bank", 0), i = pe->getIntAttribute ("index", -1);
+        if (b < 0 || b >= kBanks || i < 0 || i >= kSlots) continue;
+        auto& ps = patches[b][i];
+        ps.name = pe->getStringAttribute ("name");
+        if (auto* st = pe->getChildByName ("DaniRigPreset")) ps.state = std::make_unique<juce::XmlElement> (*st);
         for (auto* sc : pe->getChildWithTagNameIterator ("Scene"))
         {
             const int k = sc->getIntAttribute ("index", -1);
             if (k < 0 || k >= kSlots) continue;
-            patches[i].scene[k] = std::make_unique<juce::XmlElement> (*sc);
-            patches[i].scene[k]->setTagName ("Snapshot");
-            patches[i].sceneName[k] = sc->getStringAttribute ("sceneName");
+            ps.scene[k] = std::make_unique<juce::XmlElement> (*sc);
+            ps.scene[k]->setTagName ("Snapshot");
+            ps.sceneName[k] = sc->getStringAttribute ("sceneName");
         }
     }
 }

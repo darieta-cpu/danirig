@@ -23,15 +23,21 @@ Ingresso → Noise Gate → **Compressor** → **Multi Mod** → Overdrive (stil
 
 **Riordinare i moduli**: trascina un pedale dalla fascia alta del pannello (dove c'è la maniglia a puntini). Si riordinano liberamente i moduli *prima dell'ampli* (Gate, Compressor, Multi Mod, NAM Pedal, Overdrive, Distortion) e quelli *dopo il cab* (Delay, Reverb). Ampli e cabinet restano al loro posto. Lo schema "SIGNAL CHAIN" mostra l'ordine reale; quando cambi ordine c'è un fade-in di 12 ms per evitare click.
 
-## Patch e scene (i tre switch in basso)
+## Banchi, patch e scene (la fascia in basso)
 
-Nella fascia in basso ci sono tre switch a pedale (1-2-3) e un selettore **PATCH / SCENE**:
+**5 banchi x 3 patch = 15 patch**, ognuno con 3 scene. In basso trovi:
 
-- **PATCH**: ogni switch richiama uno stato *completo*: parametri, on/off, ordine dei moduli, modello NAM, pedale NAM e IR. Se due patch usano lo stesso modello/IR, questo non viene ricaricato.
-- **SCENE**: ogni switch richiama un'istantanea dei soli parametri e on/off *dentro al patch corrente* (come gli "snapshot" dei multieffetto): cambio istantaneo, nessun caricamento.
-- **SAVE** sotto ogni switch memorizza lo stato attuale in quello slot (nella modalità selezionata). Doppio click sul nome per rinominarlo. Il LED indica lo slot attivo. Gli slot vuoti si riconoscono dal nome "(empty)".
-- Le scene appartengono al patch in cui le salvi: cambiando patch, le tre scene cambiano con lui.
-- Patch e scene vengono salvati con le impostazioni, nei preset `.dprig` e nel progetto della DAW (plugin).
+- il **display LCD**: a sinistra il numero *banco-patch* in grande (es. `2-3`), a destra il nome del patch caricato e, sotto, il nome dell'eventuale scena attiva (`--` e "(no patch)" se non è caricato nulla);
+- il **selettore di banco** `<  BANK n  >`, con cinque puntini: pieno = banco che contiene patch, anello verde = banco del patch caricato, punto grande = banco visualizzato sugli switch;
+- il selettore **PATCH / SCENE**;
+- i **tre switch a pedale** (1-2-3), con LED, nome modificabile (doppio click) e pulsante **SAVE**.
+
+Come funziona:
+
+- **PATCH**: gli switch lavorano sul banco visualizzato. Premendone uno si richiama uno stato *completo*: parametri, on/off, ordine dei moduli, modello NAM, pedale NAM e IR. Se due patch usano lo stesso modello/IR, questo non viene ricaricato. Sfogliare un altro banco *non* cambia il suono: cambia solo cosa fanno gli switch; il patch caricato resta finché non ne premi un altro.
+- **SCENE**: ogni switch richiama un'istantanea dei soli parametri e on/off *dentro al patch caricato* (come gli "snapshot" dei multieffetto): cambio istantaneo, nessun caricamento. Le scene appartengono al patch in cui le salvi.
+- **SAVE** memorizza lo stato attuale nello slot (nella modalità selezionata). Gli slot vuoti si riconoscono dal nome "(empty)"; i nomi predefiniti sono `Patch banco-slot` (es. `Patch 2-1`).
+- Tutto viene salvato con le impostazioni, nei preset `.dprig` e nel progetto della DAW (plugin). I preset salvati con la versione a 3 slot si aprono nel banco 1.
 - Un patch che non ha modello NAM o IR non scarica quelli già caricati: li lascia come sono.
 
 ## Preset portatili (EXPORT) e file mancanti
