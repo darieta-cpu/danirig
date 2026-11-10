@@ -8,6 +8,7 @@
 #include "dsp/Resampler.h"
 #include "dsp/MultiMod.h"
 #include "dsp/DynaComp.h"
+#include "dsp/Taper.h"
 #include "RigEngine.h"
 #include <juce_events/juce_events.h>
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -200,7 +201,7 @@ int main (int argc, char** argv)
             c.prepare (sr, block);
             if (variant == 0) c.loadIR (ir);
             float hf = 1.0f;
-            for (int attempt = 0; attempt < 150; ++attempt)  // il caricamento è asincrono: si processa finché lo scambio avviene
+            for (int attempt = 0; attempt < 600; ++attempt)  // il caricamento è asincrono: si processa finché lo scambio avviene
             {
                 hf = gainAt (c, 10000.0);
                 if (hf < 0.6f) break;
@@ -301,7 +302,7 @@ int main (int argc, char** argv)
     std::printf ("[Compressore Dyna Comp]\n");
     {
         DynaComp c; c.prepare (sr, block); c.enabled->set (1.0f);
-        c.find ("sens")->set (8.0f); c.find ("output")->set (0.0f); c.reset();
+        c.find ("sens")->set (8.0f); c.find ("lvl")->set (6.0f); c.reset();
         auto lo = sine (sr, 220, 0.03, 48128), hi = sine (sr, 220, 0.5, 48128);
         for (size_t i = 0; i + block <= lo.size(); i += block) c.run (lo.data() + i, block);
         c.reset();
@@ -341,6 +342,46 @@ int main (int argc, char** argv)
         CHECK (e2.slotName (false, 0) == "Clean" && e2.slotName (true, 0) == "Solo" && e2.slotName (false, 1) == "Patch 1-2", "nomi salvati (e predefiniti)");
         CHECK (e2.recallSlot (true, 0) && std::abs (e2.od.find ("drive")->get() - 9.0f) < 1e-4f, "la scena sopravvive al salvataggio");
         CHECK (e2.recallSlot (false, 0) && std::abs (e2.od.find ("drive")->get() - 8.0f) < 1e-4f, "e anche il patch");
+    }
+
+    std::printf ("[Controlli di livello dei pedali: 0 = chiuso, 6 = unity, 10 = boost]\n");
+    {
+        auto run = [&] (MonoModule& m, double amp, int n = 24064)
+        {
+            m.reset();
+            auto x = sine (sr, 220, amp, (size_t) n);
+            for (size_t i = 0; i + (size_t) block <= x.size(); i += (size_t) block) m.run (x.data() + i, block);
+            return rms (x, 12000, (size_t) n - 64);
+        };
+        auto db = [] (float a, float b) { return 20.0f * std::log10 (std::max (a, 1e-9f) / std::max (b, 1e-9f)); };
+        CHECK (levelTaperGain (0.0f) == 0.0f && std::abs (levelTaperGain (6.0f) - 1.0f) < 1e-6f, "curva: 0 = silenzio esatto, 6 = guadagno 1");
+        CHECK (std::abs (20.0f * std::log10 (levelTaperGain (10.0f)) - 12.0f) < 0.01f, "curva: 10 = +12 dB");
+        struct P { const char* name; MonoModule* m; const char* lvlId; double amp; };
+        TubeScreamer ts; Ds1 ds; DynaComp dc; MultiMod mm;
+        mm.find ("mode")->set (1.0f); mm.find ("depth")->set (0.0f);   // chorus, depth 0: segnale + copia ritardata
+        P pedals[] = { { "overdrive", &ts, "lvl", 0.2 }, { "distortion", &ds, "lvl", 0.2 }, { "compressore", &dc, "lvl", 0.126 }, { "multi mod", &mm, "lvl", 0.15 } };
+        for (auto& p : pedals)
+        {
+            p.m->prepare (sr, block); p.m->enabled->set (1.0f);
+            const double inRms = p.amp * 0.7071;
+            auto at = [&] (float lvl) { p.m->find (p.lvlId)->set (lvl); return run (*p.m, p.amp); };
+            const float l0 = at (0.0f), l3 = at (3.0f), l6 = at (6.0f), l8 = at (8.0f), l10 = at (10.0f);
+            char msg[200];
+            std::snprintf (msg, sizeof msg, "%s: livello 0 / 3 / 6 / 8 / 10 -> %.1f / %.1f / %.1f / %.1f / %.1f dB rispetto all'ingresso", p.name,
+                           db (l0, (float) inRms), db (l3, (float) inRms), db (l6, (float) inRms), db (l8, (float) inRms), db (l10, (float) inRms));
+            std::printf ("       %s\n", msg);
+            std::snprintf (msg, sizeof msg, "%s: Level 0 chiude completamente il segnale", p.name);
+            CHECK (l0 < 1e-6f, msg);
+            std::snprintf (msg, sizeof msg, "%s: Level 6 = +12 dB a fondo corsa rispetto a Level 6", p.name);
+            CHECK (std::abs (db (l10, l6) - 12.0f) < 0.6f, msg);
+            std::snprintf (msg, sizeof msg, "%s: Level 3 sensibilmente piu' basso di Level 6 (-10..-16 dB)", p.name);
+            CHECK (db (l3, l6) < -10.0f && db (l3, l6) > -16.0f, msg);
+            if (std::string (p.name) == "overdrive" || std::string (p.name) == "distortion" || std::string (p.name) == "compressore")
+            {
+                std::snprintf (msg, sizeof msg, "%s: a Level 6 il livello e' ~ quello del segnale pulito (unity)", p.name);
+                CHECK (std::abs (db (l6, (float) inRms)) < 2.0f, msg);
+            }
+        }
     }
 
     std::printf ("[5 banchi x 3 patch]\n");
@@ -448,6 +489,19 @@ int main (int argc, char** argv)
             auto x = sine (sr, 220, 0.1, 24064);
             for (size_t i = 0; i + block <= x.size(); i += block) p.run (x.data() + i, block);
             CHECK (p.getInfo().loaded && finite (x) && rms (x, 12000, 24000) > 1e-4f, "pedale NAM: carica e suona");
+            // livello del pedale NAM: 0 = chiuso, 10 = +12 dB rispetto a 6
+            p.normalize->set (0.0f);
+            auto lvl = [&] (float v)
+            {
+                p.outputDb->set (v); p.reset();
+                auto y = sine (sr, 220, 0.1, 24064);
+                for (size_t i = 0; i + block <= y.size(); i += block) p.run (y.data() + i, block);
+                return rms (y, 12000, 24000);
+            };
+            const float o0 = lvl (0.0f), o6 = lvl (6.0f), o10 = lvl (10.0f);
+            std::printf ("       pedale NAM: output 0 / 6 / 10 -> %.6f / %.4f / %.4f (10 vs 6: %.1f dB)\n", o0, o6, o10, 20.0f * std::log10 (o10 / o6));
+            CHECK (o0 < 1e-6f, "pedale NAM: Output 0 chiude completamente il segnale");
+            CHECK (std::abs (20.0f * std::log10 (o10 / o6) - 12.0f) < 0.6f, "pedale NAM: Output 10 = +12 dB rispetto a 6");
             p.collectGarbage();
         }
     }

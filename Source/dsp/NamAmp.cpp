@@ -1,4 +1,5 @@
 #include "NamAmp.h"
+#include "Taper.h"
 #include <juce_events/juce_events.h>
 #include <array>
 #include <filesystem>
@@ -173,7 +174,8 @@ NamAmp::NamAmp (const juce::String& id, const juce::String& titleText, bool with
         mid    = &addFloat ("mid",    "Mid",    -12.0f, 12.0f, 0.0f, " dB", 1);
         treble = &addFloat ("treble", "Treble", -12.0f, 12.0f, 0.0f, " dB", 1);
     }
-    outputDb  = &addFloat ("output", "Output", -24.0f, 12.0f, 0.0f, " dB", 1);
+    if (withEq) outputDb = &addFloat ("output", "Output", -24.0f, 12.0f, 0.0f, " dB", 1);
+    else        outputDb = &addFloat ("lvl", "Output", 0.0f, 10.0f, 6.0f, "", 1);   // pedale: 0 = chiuso, 6 = unity, 10 = +12 dB
     normalize = &addToggle ("norm", "Normalize", true);
     quality   = &addChoice ("quality", "A2 Size", { "Full", "Lite" }, 0);
 }
@@ -232,9 +234,10 @@ void NamAmp::process (float* x, int n)
     }
 
     const float inT = dbToGain (inputDb->get());
-    float outDb = outputDb->get();
-    if (normalize->on() && I.current->hasLoudness) outDb += (float) (-18.0 - I.current->loudness);
-    const float outT = dbToGain (outDb);
+    float normDb = 0.0f;
+    if (normalize->on() && I.current->hasLoudness) normDb = (float) (-18.0 - I.current->loudness);
+    const float outT = I.hasEq ? dbToGain (outputDb->get() + normDb)
+                               : levelTaperGain (outputDb->get()) * dbToGain (normDb);
 
     if (I.fading) std::copy (x, x + n, I.fadeBuf.begin());
 

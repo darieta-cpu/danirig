@@ -271,7 +271,7 @@ public:
     explicit MultiModPanel (MultiMod& m)
         : PanelBase (m, Look::Stomp, juce::Colour (0xff1f7f86), juce::Colours::white, juce::Colour (0xff12272a), juce::Colours::white), mm (m)
     {
-        for (const char* id : { "rate", "depth", "level" }) addKnob (*m.find (id));
+        for (const char* id : { "rate", "depth", "lvl" }) addKnob (*m.find (id));
         modeBox = addChoice (*m.find ("mode"));
         divBox  = addChoice (*m.find ("div"));
         modeBox->extra = [this] { mm.applyModeDefaults(); for (auto& k : knobs) k->refresh(); };   // rate/depth tipici del modo

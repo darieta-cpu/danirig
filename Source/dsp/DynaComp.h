@@ -1,12 +1,13 @@
 #pragma once
 #include "Module.h"
 #include "Biquad.h"
+#include "Taper.h"
 #include <cmath>
 
 namespace dr
 {
 // Compressore stile MXR Dyna Comp: pochi controlli (Sens, Output), attacco veloce, rilascio medio, rapporto alto,
-// ginocchio morbido, make-up automatico parziale (più Sens = più sustain). Zero latenza, nessun lookahead.
+// ginocchio morbido, make-up calibrato sul livello di riferimento (più Sens = più sustain). Zero latenza, nessun lookahead.
 // Mix: compressione parallela (100 % = come il pedale).
 class DynaComp : public MonoModule
 {
@@ -14,7 +15,7 @@ public:
     DynaComp() : MonoModule ("comp", "COMPRESSOR")
     {
         sens   = &addFloat ("sens", "Sens", 0.0f, 10.0f, 5.0f, "", 1);
-        output = &addFloat ("output", "Output", -12.0f, 12.0f, 0.0f, " dB", 1);
+        output = &addFloat ("lvl", "Output", 0.0f, 10.0f, 6.0f, "", 1);   // 0 = chiuso, 6 = unity, 10 = +12 dB
         mix    = &addFloat ("mix", "Mix", 0.0f, 100.0f, 100.0f, " %", 0);
     }
 
@@ -37,8 +38,15 @@ public:
         const float thr = -6.0f - s * 4.4f;                          // soglia: -6 dB (Sens 0) .. -50 dB (Sens 10)
         constexpr float ratio = 8.0f, knee = 8.0f;
         const float slope = 1.0f - 1.0f / ratio;
-        const float makeup = 0.55f * (-thr) * slope;                 // recupero parziale del livello perso
-        const float outDb = output->get();
+        // make-up: un segnale al livello di riferimento (-18 dBFS di picco) esce a livello invariato con Output = 6;
+        // i segnali più deboli vengono alzati, quelli più forti abbassati (sustain)
+        constexpr float refDb = -18.0f;
+        const float refOver = refDb - thr;
+        float refGr = 0.0f;
+        if (refOver >= knee * 0.5f) refGr = refOver * slope;
+        else if (refOver > -knee * 0.5f) { const float t = refOver + knee * 0.5f; refGr = slope * t * t / (2.0f * knee); }
+        const float makeup = refGr;
+        const float outGainLin = levelTaperGain (output->get());
         const float mixV = mix->get() * 0.01f;
 
         for (int i = 0; i < n; ++i)
@@ -52,7 +60,7 @@ public:
             if (over >= knee * 0.5f) gr = over * slope;
             else if (over > -knee * 0.5f) { const float t = over + knee * 0.5f; gr = slope * t * t / (2.0f * knee); }
             grSm += (gr - grSm) * (gr > grSm ? grAtk : grRel);
-            const float g = std::exp ((makeup - grSm + outDb) * 0.11512925f);
+            const float g = std::exp ((makeup - grSm) * 0.11512925f) * outGainLin;
             x[i] = in * (1.0f - mixV) + in * g * mixV;
         }
     }

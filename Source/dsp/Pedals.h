@@ -1,6 +1,7 @@
 #pragma once
 #include "Module.h"
 #include "Biquad.h"
+#include "Taper.h"
 #include <juce_dsp/juce_dsp.h>
 
 namespace dr
@@ -69,7 +70,7 @@ public:
     {
         drive = &addFloat ("drive", "Drive", 0.0f, 10.0f, 5.0f, "", 1);
         tone  = &addFloat ("tone",  "Tone",  0.0f, 10.0f, 5.0f, "", 1);
-        level = &addFloat ("level", "Level", 0.0f, 10.0f, 5.0f, "", 1);
+        level = &addFloat ("lvl", "Level", 0.0f, 10.0f, 6.0f, "", 1);   // 0 = chiuso, 6 = unity, 10 = +12 dB
     }
 
     void reset() override
@@ -102,7 +103,7 @@ protected:
                 k = 2.0 * kIs * rf;
                 lpFb.setCutoff (fs, 1.0 / (2 * kPi * rf * 51e-12));
                 lpTone.setCutoff (fs, 720.0 * std::pow (4.6, toneSm / 10.0));
-                outGain = dbToGain ((levelSm - 5.0f) * 2.4f);
+                outGain = levelTaperGain (levelSm) * kUnityComp;
             }
             const float x = d[i];
             const float hp = x - lpHp.lp (x);                        // s*t1/(1+s*t1)
@@ -115,7 +116,8 @@ protected:
 private:
     Param *drive, *tone, *level;
     double fs = 192000, rf = 100e3, gain = 20, k = 1e-4;
-    float driveSm = 5, toneSm = 5, levelSm = 5, smCoef = 0.001f, outGain = 1;
+    static constexpr float kUnityComp = 0.351f;   // calibrato (-9.1 dB): con Drive/Tone a 5 e Level a 6 il livello RMS è ~ quello del segnale pulito (sinusoide a -14 dBFS)
+    float driveSm = 5, toneSm = 5, levelSm = 6, smCoef = 0.001f, outGain = 1;
     OnePole lpHp, lpFb, lpTone;
     Biquad dc;
 };
@@ -130,7 +132,7 @@ public:
     {
         dist  = &addFloat ("dist",  "Dist",  0.0f, 10.0f, 5.0f, "", 1);
         tone  = &addFloat ("tone",  "Tone",  0.0f, 10.0f, 5.0f, "", 1);
-        level = &addFloat ("level", "Level", 0.0f, 10.0f, 5.0f, "", 1);
+        level = &addFloat ("lvl", "Level", 0.0f, 10.0f, 6.0f, "", 1);   // 0 = chiuso, 6 = unity, 10 = +12 dB
     }
 
     void reset() override
@@ -166,7 +168,7 @@ protected:
                 rf = 2e3 + 100e3 * std::pow (distSm / 10.0, 1.6);
                 opGain = rf / 470.0;
                 lpOpFb.setCutoff (fs, 1.0 / (2 * kPi * rf * 100e-12));
-                outGain = dbToGain ((levelSm - 5.0f) * 3.0f);
+                outGain = levelTaperGain (levelSm) * kUnityComp;
             }
             // 1) booster a transistor: HP 60 Hz, ~ +18 dB, clipping asimmetrico, LP 9 kHz
             const float x = d[i];
@@ -189,7 +191,8 @@ protected:
 private:
     Param *dist, *tone, *level;
     double fs = 192000, rf = 50e3, opGain = 100;
-    float distSm = 5, toneSm = 5, levelSm = 5, smCoef = 0.001f, outGain = 1;
+    static constexpr float kUnityComp = 0.204f;   // calibrato (-13.8 dB): con Dist/Tone a 5 e Level a 6 il livello RMS è ~ quello del segnale pulito (sinusoide a -14 dBFS)
+    float distSm = 5, toneSm = 5, levelSm = 6, smCoef = 0.001f, outGain = 1;
     OnePole lpIn, lpBoost, lpOpHp, lpOpFb, lpTone, lpTone2;
     Biquad dc;
 };
