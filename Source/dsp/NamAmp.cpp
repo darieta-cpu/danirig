@@ -175,7 +175,7 @@ NamAmp::NamAmp (const juce::String& id, const juce::String& titleText, bool with
         treble = &addFloat ("treble", "Treble", -12.0f, 12.0f, 0.0f, " dB", 1);
     }
     if (withEq) outputDb = &addFloat ("output", "Output", -24.0f, 12.0f, 0.0f, " dB", 1);
-    else        outputDb = &addFloat ("lvl", "Output", 0.0f, 10.0f, 6.0f, "", 1);   // pedale: 0 = chiuso, 6 = unity, 10 = +12 dB
+    else        outputDb = &addFloat ("lvl", "Output", 0.0f, 10.0f, 5.0f, "", 1);   // pedale: 0 = chiuso, 5 = unity, 10 = +12 dB
     normalize = &addToggle ("norm", "Normalize", true);
     quality   = &addChoice ("quality", "A2 Size", { "Full", "Lite" }, 0);
 }

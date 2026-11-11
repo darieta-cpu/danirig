@@ -15,7 +15,7 @@ public:
     DynaComp() : MonoModule ("comp", "COMPRESSOR")
     {
         sens   = &addFloat ("sens", "Sens", 0.0f, 10.0f, 5.0f, "", 1);
-        output = &addFloat ("lvl", "Output", 0.0f, 10.0f, 6.0f, "", 1);   // 0 = chiuso, 6 = unity, 10 = +12 dB
+        output = &addFloat ("lvl", "Output", 0.0f, 10.0f, 5.0f, "", 1);   // 0 = chiuso, 5 = unity, 10 = +12 dB
         mix    = &addFloat ("mix", "Mix", 0.0f, 100.0f, 100.0f, " %", 0);
     }
 
@@ -38,7 +38,7 @@ public:
         const float thr = -6.0f - s * 4.4f;                          // soglia: -6 dB (Sens 0) .. -50 dB (Sens 10)
         constexpr float ratio = 8.0f, knee = 8.0f;
         const float slope = 1.0f - 1.0f / ratio;
-        // make-up: un segnale al livello di riferimento (-18 dBFS di picco) esce a livello invariato con Output = 6;
+        // make-up: un segnale al livello di riferimento (-18 dBFS di picco) esce a livello invariato con Output = 5;
         // i segnali più deboli vengono alzati, quelli più forti abbassati (sustain)
         constexpr float refDb = -18.0f;
         const float refOver = refDb - thr;

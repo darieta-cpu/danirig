@@ -133,7 +133,7 @@ void RigEngine::process (const float* const* in, int numIn, float* const* out, i
 std::unique_ptr<juce::XmlElement> RigEngine::saveState (bool includeBank) const
 {
     auto xml = std::make_unique<juce::XmlElement> ("DaniRigPreset");
-    xml->setAttribute ("version", 2);
+    xml->setAttribute ("version", 3);
     for (auto& p : globals.params) xml->setAttribute ("g." + p->id, (double) p->get());
     for (auto* m : allModules())
         for (auto& p : m->params) xml->setAttribute (m->moduleId + "." + p->id, (double) p->get());
@@ -149,13 +149,17 @@ std::unique_ptr<juce::XmlElement> RigEngine::saveState (bool includeBank) const
 void RigEngine::loadState (const juce::XmlElement& xml)
 {
     if (! xml.hasTagName ("DaniRigPreset")) return;
+    const bool oldLevels = xml.getIntAttribute ("version", 1) < 3;     // livelli salvati con unity a 6
     for (auto& p : globals.params)
         if (xml.hasAttribute ("g." + p->id)) p->set ((float) xml.getDoubleAttribute ("g." + p->id));
     for (auto* m : allModules())
         for (auto& p : m->params)
         {
             const auto key = m->moduleId + "." + p->id;
-            if (xml.hasAttribute (key)) p->set ((float) xml.getDoubleAttribute (key));
+            if (! xml.hasAttribute (key)) continue;
+            float v = (float) xml.getDoubleAttribute (key);
+            if (oldLevels && p->id == "lvl") v = migrateLevelV2toV3 (v);
+            p->set (v);
         }
     if (xml.hasAttribute ("preOrder"))  preOrder.store ((uint32_t) xml.getIntAttribute ("preOrder"));
     if (xml.hasAttribute ("postOrder")) postOrder.store ((uint32_t) xml.getIntAttribute ("postOrder"));
@@ -244,6 +248,7 @@ juce::Result RigEngine::exportBundle (const juce::File& presetFile, juce::String
 std::unique_ptr<juce::XmlElement> RigEngine::saveSnapshot() const
 {
     auto xml = std::make_unique<juce::XmlElement> ("Snapshot");
+    xml->setAttribute ("version", 3);
     for (auto* m : allModules())
         for (auto& p : m->params) xml->setAttribute (m->moduleId + "." + p->id, (double) p->get());
     return xml;
@@ -251,11 +256,15 @@ std::unique_ptr<juce::XmlElement> RigEngine::saveSnapshot() const
 
 void RigEngine::applySnapshot (const juce::XmlElement& snap)
 {
+    const bool oldLevels = snap.getIntAttribute ("version", 1) < 3;
     for (auto* m : allModules())
         for (auto& p : m->params)
         {
             const auto key = m->moduleId + "." + p->id;
-            if (snap.hasAttribute (key)) p->set ((float) snap.getDoubleAttribute (key));
+            if (! snap.hasAttribute (key)) continue;
+            float v = (float) snap.getDoubleAttribute (key);
+            if (oldLevels && p->id == "lvl") v = migrateLevelV2toV3 (v);
+            p->set (v);
         }
     ++stateVersion;
 }

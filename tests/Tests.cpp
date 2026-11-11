@@ -302,7 +302,7 @@ int main (int argc, char** argv)
     std::printf ("[Compressore Dyna Comp]\n");
     {
         DynaComp c; c.prepare (sr, block); c.enabled->set (1.0f);
-        c.find ("sens")->set (8.0f); c.find ("lvl")->set (6.0f); c.reset();
+        c.find ("sens")->set (8.0f); c.find ("lvl")->set (5.0f); c.reset();
         auto lo = sine (sr, 220, 0.03, 48128), hi = sine (sr, 220, 0.5, 48128);
         for (size_t i = 0; i + block <= lo.size(); i += block) c.run (lo.data() + i, block);
         c.reset();
@@ -344,7 +344,7 @@ int main (int argc, char** argv)
         CHECK (e2.recallSlot (false, 0) && std::abs (e2.od.find ("drive")->get() - 8.0f) < 1e-4f, "e anche il patch");
     }
 
-    std::printf ("[Controlli di livello dei pedali: 0 = chiuso, 6 = unity, 10 = boost]\n");
+    std::printf ("[Controlli di livello dei pedali: 0 = chiuso, 5 (meta' corsa) = unity, 10 = boost]\n");
     {
         auto run = [&] (MonoModule& m, double amp, int n = 24064)
         {
@@ -354,7 +354,7 @@ int main (int argc, char** argv)
             return rms (x, 12000, (size_t) n - 64);
         };
         auto db = [] (float a, float b) { return 20.0f * std::log10 (std::max (a, 1e-9f) / std::max (b, 1e-9f)); };
-        CHECK (levelTaperGain (0.0f) == 0.0f && std::abs (levelTaperGain (6.0f) - 1.0f) < 1e-6f, "curva: 0 = silenzio esatto, 6 = guadagno 1");
+        CHECK (levelTaperGain (0.0f) == 0.0f && std::abs (levelTaperGain (5.0f) - 1.0f) < 1e-6f, "curva: 0 = silenzio esatto, 5 (meta' corsa) = guadagno 1");
         CHECK (std::abs (20.0f * std::log10 (levelTaperGain (10.0f)) - 12.0f) < 0.01f, "curva: 10 = +12 dB");
         struct P { const char* name; MonoModule* m; const char* lvlId; double amp; };
         TubeScreamer ts; Ds1 ds; DynaComp dc; MultiMod mm;
@@ -365,23 +365,43 @@ int main (int argc, char** argv)
             p.m->prepare (sr, block); p.m->enabled->set (1.0f);
             const double inRms = p.amp * 0.7071;
             auto at = [&] (float lvl) { p.m->find (p.lvlId)->set (lvl); return run (*p.m, p.amp); };
-            const float l0 = at (0.0f), l3 = at (3.0f), l6 = at (6.0f), l8 = at (8.0f), l10 = at (10.0f);
+            const float l0 = at (0.0f), l3 = at (3.0f), l6 = at (5.0f), l8 = at (8.0f), l10 = at (10.0f);
             char msg[200];
-            std::snprintf (msg, sizeof msg, "%s: livello 0 / 3 / 6 / 8 / 10 -> %.1f / %.1f / %.1f / %.1f / %.1f dB rispetto all'ingresso", p.name,
+            std::snprintf (msg, sizeof msg, "%s: livello 0 / 3 / 5 / 8 / 10 -> %.1f / %.1f / %.1f / %.1f / %.1f dB rispetto all'ingresso", p.name,
                            db (l0, (float) inRms), db (l3, (float) inRms), db (l6, (float) inRms), db (l8, (float) inRms), db (l10, (float) inRms));
             std::printf ("       %s\n", msg);
             std::snprintf (msg, sizeof msg, "%s: Level 0 chiude completamente il segnale", p.name);
             CHECK (l0 < 1e-6f, msg);
-            std::snprintf (msg, sizeof msg, "%s: Level 6 = +12 dB a fondo corsa rispetto a Level 6", p.name);
+            std::snprintf (msg, sizeof msg, "%s: Level 10 = +12 dB rispetto a Level 5 (unity)", p.name);
             CHECK (std::abs (db (l10, l6) - 12.0f) < 0.6f, msg);
-            std::snprintf (msg, sizeof msg, "%s: Level 3 sensibilmente piu' basso di Level 6 (-10..-16 dB)", p.name);
-            CHECK (db (l3, l6) < -10.0f && db (l3, l6) > -16.0f, msg);
+            std::snprintf (msg, sizeof msg, "%s: Level 3 sensibilmente piu' basso di Level 5 (-9..-13 dB)", p.name);
+            CHECK (db (l3, l6) < -9.0f && db (l3, l6) > -13.0f, msg);
             if (std::string (p.name) == "overdrive" || std::string (p.name) == "distortion" || std::string (p.name) == "compressore")
             {
-                std::snprintf (msg, sizeof msg, "%s: a Level 6 il livello e' ~ quello del segnale pulito (unity)", p.name);
+                std::snprintf (msg, sizeof msg, "%s: a Level 5 (meta' corsa) il livello e' ~ quello del segnale pulito (unity)", p.name);
                 CHECK (std::abs (db (l6, (float) inRms)) < 2.0f, msg);
             }
         }
+    }
+
+    std::printf ("[Migrazione dei livelli (unity 6 -> 5)]\n");
+    {
+        // stesso guadagno prima e dopo la conversione, per ogni posizione salvata con la scala precedente
+        auto oldGain = [] (float p) { return p <= 6.0f ? std::pow (p / 6.0f, 2.5f) : std::pow (10.0f, (p - 6.0f) * 3.0f / 20.0f); };
+        float worst = 0;
+        for (float p = 0.0f; p <= 10.001f; p += 0.25f)
+            worst = std::max (worst, std::abs (levelTaperGain (migrateLevelV2toV3 (p)) - oldGain (p)) / std::max (oldGain (p), 1e-3f));
+        CHECK (worst < 0.02f && std::abs (migrateLevelV2toV3 (6.0f) - 5.0f) < 1e-6f && std::abs (migrateLevelV2toV3 (10.0f) - 10.0f) < 1e-6f,
+               "il guadagno dei vecchi preset resta uguale dopo la conversione (unity 6 diventa 5)");
+        juce::XmlElement old ("DaniRigPreset"); old.setAttribute ("version", 2); old.setAttribute ("od.lvl", 6.0); old.setAttribute ("dist.lvl", 3.0); old.setAttribute ("comp.lvl", 8.0);
+        RigEngine e; e.loadState (old);
+        CHECK (std::abs (e.od.find ("lvl")->get() - 5.0f) < 1e-4f && std::abs (e.dist.find ("lvl")->get() - 2.5f) < 1e-4f && std::abs (e.comp.find ("lvl")->get() - 7.5f) < 1e-4f,
+               "preset versione 2: livelli 6 / 3 / 8 -> 5 / 2.5 / 7.5");
+        juce::XmlElement cur ("DaniRigPreset"); cur.setAttribute ("version", 3); cur.setAttribute ("od.lvl", 6.0);
+        RigEngine e2; e2.loadState (cur);
+        CHECK (std::abs (e2.od.find ("lvl")->get() - 6.0f) < 1e-4f, "preset versione 3: livello invariato");
+        auto snap = e.saveSnapshot();
+        CHECK (snap->getIntAttribute ("version") == 3, "le nuove scene sono marcate versione 3");
     }
 
     std::printf ("[5 banchi x 3 patch]\n");
@@ -498,10 +518,10 @@ int main (int argc, char** argv)
                 for (size_t i = 0; i + block <= y.size(); i += block) p.run (y.data() + i, block);
                 return rms (y, 12000, 24000);
             };
-            const float o0 = lvl (0.0f), o6 = lvl (6.0f), o10 = lvl (10.0f);
-            std::printf ("       pedale NAM: output 0 / 6 / 10 -> %.6f / %.4f / %.4f (10 vs 6: %.1f dB)\n", o0, o6, o10, 20.0f * std::log10 (o10 / o6));
+            const float o0 = lvl (0.0f), o6 = lvl (5.0f), o10 = lvl (10.0f);
+            std::printf ("       pedale NAM: output 0 / 5 / 10 -> %.6f / %.4f / %.4f (10 vs 5: %.1f dB)\n", o0, o6, o10, 20.0f * std::log10 (o10 / o6));
             CHECK (o0 < 1e-6f, "pedale NAM: Output 0 chiude completamente il segnale");
-            CHECK (std::abs (20.0f * std::log10 (o10 / o6) - 12.0f) < 0.6f, "pedale NAM: Output 10 = +12 dB rispetto a 6");
+            CHECK (std::abs (20.0f * std::log10 (o10 / o6) - 12.0f) < 0.6f, "pedale NAM: Output 10 = +12 dB rispetto a 5 (unity)");
             p.collectGarbage();
         }
     }

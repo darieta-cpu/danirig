@@ -20,7 +20,7 @@ public:
         mode  = &addChoice ("mode", "Mode", { "Phase", "Chorus", "Tremolo" }, 0);
         rate  = &addFloat ("rate", "Rate", 0.1f, 12.0f, 0.6f, " Hz", 2);
         depth = &addFloat ("depth", "Depth", 0.0f, 10.0f, 6.0f, "", 1);
-        level = &addFloat ("lvl", "Level", 0.0f, 10.0f, 6.0f, "", 1);   // 0 = chiuso, 6 = unity, 10 = +12 dB
+        level = &addFloat ("lvl", "Level", 0.0f, 10.0f, 5.0f, "", 1);   // 0 = chiuso, 5 = unity, 10 = +12 dB
         div   = &addChoice ("div", "Tap Div", { "Tap 1/2", "Tap 1/4", "Tap 1/8.", "Tap 1/8", "Tap 1/16" }, 1);
     }
 

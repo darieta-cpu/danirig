@@ -70,7 +70,7 @@ public:
     {
         drive = &addFloat ("drive", "Drive", 0.0f, 10.0f, 5.0f, "", 1);
         tone  = &addFloat ("tone",  "Tone",  0.0f, 10.0f, 5.0f, "", 1);
-        level = &addFloat ("lvl", "Level", 0.0f, 10.0f, 6.0f, "", 1);   // 0 = chiuso, 6 = unity, 10 = +12 dB
+        level = &addFloat ("lvl", "Level", 0.0f, 10.0f, 5.0f, "", 1);   // 0 = chiuso, 5 = unity, 10 = +12 dB
     }
 
     void reset() override
@@ -116,8 +116,8 @@ protected:
 private:
     Param *drive, *tone, *level;
     double fs = 192000, rf = 100e3, gain = 20, k = 1e-4;
-    static constexpr float kUnityComp = 0.351f;   // calibrato (-9.1 dB): con Drive/Tone a 5 e Level a 6 il livello RMS è ~ quello del segnale pulito (sinusoide a -14 dBFS)
-    float driveSm = 5, toneSm = 5, levelSm = 6, smCoef = 0.001f, outGain = 1;
+    static constexpr float kUnityComp = 0.351f;   // calibrato (-9.1 dB): con Drive/Tone a 5 e Level a 5 il livello RMS è ~ quello del segnale pulito (sinusoide a -14 dBFS)
+    float driveSm = 5, toneSm = 5, levelSm = 5, smCoef = 0.001f, outGain = 1;
     OnePole lpHp, lpFb, lpTone;
     Biquad dc;
 };
@@ -132,7 +132,7 @@ public:
     {
         dist  = &addFloat ("dist",  "Dist",  0.0f, 10.0f, 5.0f, "", 1);
         tone  = &addFloat ("tone",  "Tone",  0.0f, 10.0f, 5.0f, "", 1);
-        level = &addFloat ("lvl", "Level", 0.0f, 10.0f, 6.0f, "", 1);   // 0 = chiuso, 6 = unity, 10 = +12 dB
+        level = &addFloat ("lvl", "Level", 0.0f, 10.0f, 5.0f, "", 1);   // 0 = chiuso, 5 = unity, 10 = +12 dB
     }
 
     void reset() override
@@ -191,8 +191,8 @@ protected:
 private:
     Param *dist, *tone, *level;
     double fs = 192000, rf = 50e3, opGain = 100;
-    static constexpr float kUnityComp = 0.204f;   // calibrato (-13.8 dB): con Dist/Tone a 5 e Level a 6 il livello RMS è ~ quello del segnale pulito (sinusoide a -14 dBFS)
-    float distSm = 5, toneSm = 5, levelSm = 6, smCoef = 0.001f, outGain = 1;
+    static constexpr float kUnityComp = 0.204f;   // calibrato (-13.8 dB): con Dist/Tone a 5 e Level a 5 il livello RMS è ~ quello del segnale pulito (sinusoide a -14 dBFS)
+    float distSm = 5, toneSm = 5, levelSm = 5, smCoef = 0.001f, outGain = 1;
     OnePole lpIn, lpBoost, lpOpHp, lpOpFb, lpTone, lpTone2;
     Biquad dc;
 };
