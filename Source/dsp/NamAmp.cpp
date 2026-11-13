@@ -40,6 +40,39 @@ void ensureNamArchitecturesRegistered()
     });
 }
 
+ModelInfo extractInfo (const nam::dspData& d, const juce::File& f)
+{
+    ModelInfo m;
+    m.name = f.getFileNameWithoutExtension();
+    m.architecture = juce::String (d.architecture);
+    m.version = juce::String (d.version);
+    m.modelRate = d.expected_sample_rate;
+    const auto& md = d.metadata;
+    auto str = [&md] (const char* k) -> juce::String
+    {
+        if (md.is_object() && md.contains (k) && md.at (k).is_string()) return juce::String::fromUTF8 (md.at (k).get<std::string>().c_str()).trim();
+        return {};
+    };
+    auto num = [&md] (const char* k, double& out) -> bool
+    {
+        if (md.is_object() && md.contains (k) && md.at (k).is_number()) { out = md.at (k).get<double>(); return true; }
+        return false;
+    };
+    m.title = str ("name"); m.modeledBy = str ("modeled_by");
+    m.gearMake = str ("gear_make"); m.gearModel = str ("gear_model"); m.gearType = str ("gear_type"); m.toneType = str ("tone_type");
+    m.hasLoudness = num ("loudness", m.loudness);
+    m.hasInputDbu = num ("input_level_dbu", m.inputDbu);
+    m.hasOutputDbu = num ("output_level_dbu", m.outputDbu);
+    if (md.is_object() && md.contains ("date") && md.at ("date").is_object())
+    {
+        const auto& dt = md.at ("date");
+        if (dt.contains ("year") && dt.contains ("month") && dt.contains ("day"))
+            m.date = juce::String (dt.at ("year").get<int>()) + "-" + juce::String (dt.at ("month").get<int>()).paddedLeft ('0', 2)
+                     + "-" + juce::String (dt.at ("day").get<int>()).paddedLeft ('0', 2);
+    }
+    return m;
+}
+
 struct Loaded
 {
     std::unique_ptr<nam::DSP> dsp;
@@ -98,15 +131,26 @@ struct NamAmp::Impl
     void startLoad (const juce::File& f)
     {
         const int gen = ++generation;
-        { juce::ScopedLock sl (lock); path = f.getFullPathName(); info = {}; info.name = f.getFileNameWithoutExtension(); info.loading = prepared; }
-        if (! prepared) return;                           // verrà caricato da prepare(), con il sample rate giusto
+        { juce::ScopedLock sl (lock); path = f.getFullPathName(); info = {}; info.name = f.getFileNameWithoutExtension(); info.loading = true; }
+        // Senza audio attivo si leggono comunque i metadati (per mostrarli nella UI); il modello vero viene
+        // caricato da prepare(), con il sample rate giusto.
+        const bool prep = prepared;
         const double dRate = devRate; const int mBlock = maxBlock; const bool lite = owner.quality->index() == 1;
-        pool.addJob ([this, f, gen, dRate, mBlock, lite]
+        pool.addJob ([this, f, gen, dRate, mBlock, lite, prep]
         {
             try
             {
                 auto L = std::make_unique<Loaded>();
-                L->dsp = nam::get_dsp (std::filesystem::path (f.getFullPathName().toStdString()));
+                nam::dspData data;
+                L->dsp = nam::get_dsp (std::filesystem::path (f.getFullPathName().toStdString()), data);
+                ModelInfo meta = extractInfo (data, f);
+                if (! prep)
+                {
+                    if (gen != generation.load()) return;
+                    juce::ScopedLock sl (lock);
+                    const auto err = info.error; info = meta; info.error = err; info.loaded = true; info.loading = false;
+                    return;
+                }
                 double rate = L->dsp->GetExpectedSampleRate();
                 if (rate <= 0) rate = 48000.0;
                 L->modelRate = rate;
@@ -127,7 +171,7 @@ struct NamAmp::Impl
                 if (gen != generation.load()) return;            // nel frattempo richiesto un altro file
                 {
                     juce::ScopedLock sl (lock);
-                    info.loaded = true; info.loading = false; info.slimmable = slim; info.modelRate = rate;
+                    info = meta; info.loaded = true; info.loading = false; info.slimmable = slim; info.modelRate = rate;
                 }
                 delete pending.exchange (L.release());
             }

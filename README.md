@@ -24,6 +24,13 @@ Ingresso → Noise Gate → **Compressor** → **Multi Mod** → Overdrive (stil
 
 **Riordinare i moduli**: trascina un pedale dalla fascia alta del pannello (dove c'è la maniglia a puntini). Si riordinano liberamente i moduli *prima dell'ampli* (Gate, Compressor, Multi Mod, NAM Pedal, Overdrive, Distortion) e quelli *dopo il cab* (Delay, Reverb). Ampli e cabinet restano al loro posto. Lo schema "SIGNAL CHAIN" mostra l'ordine reale; quando cambi ordine c'è un fade-in di 12 ms per evitare click.
 
+## Caricare e gestire modelli NAM e IR
+
+- **Drag & drop**: trascina un `.nam` sul pannello dell'**ampli** o del **pedale NAM**, e un file audio (`.wav`, `.aif`, `.flac`, `.ogg`) sul **cabinet**: il pannello si evidenzia in oro e il file viene caricato. Trascinando un preset `.dprig` sulla finestra lo carichi.
+- **Informazioni sul profilo**: l'ampli mostra il nome del profilo (quello scritto dall'autore, altrimenti il nome del file), marca/modello/tipo di suono se presenti, e una riga tecnica (architettura, sample rate, livelli d'ingresso e uscita in dBu, loudness). Sul pedale NAM le stesse informazioni compaiono in un tooltip passando il mouse sul nome. I metadati si leggono dal file anche senza audio attivo; quali campi ci siano dipende da chi ha creato il profilo.
+- **LIB (preferiti e recenti)**: il pulsante `LIB` accanto a LOAD apre un menu con i **preferiti**, gli ultimi **12 file recenti** (separati per NAM e IR), *Sfoglia...*, *Aggiungi/Rimuovi dai preferiti* per il file corrente e *Svuota i recenti*. I file spostati o cancellati compaiono grigi con la dicitura "[non trovato]". La lista è salvata in `DaniRig/library.xml` nei dati utente ed è condivisa tra app e plugin.
+- **Cabinet, grafico**: sotto il nome dell'IR trovi lo **spettro dell'IR** (linea oro), la **risposta con i filtri** Low Cut / High Cut applicati (linea bianca, si aggiorna muovendo le manopole) e l'**inviluppo temporale** di tutta la durata, più durata, sample rate e canali.
+
 ## Banchi, patch e scene (la fascia in basso)
 
 **5 banchi x 3 patch = 15 patch**, ognuno con 3 scene. In basso trovi:

@@ -220,17 +220,18 @@ void RigUI::loadPreset()
 {
     chooser = std::make_unique<juce::FileChooser> ("Carica preset", FileStepper::lastDir(), "*.dprig");
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
-                          [this] (const juce::FileChooser& fc)
-                          {
-                              auto f = fc.getResult();
-                              if (! f.existsAsFile()) return;
-                              if (auto xml = juce::XmlDocument::parse (f))
-                              {
-                                  RigEngine::resolveRelativePaths (*xml, f.getParentDirectory());   // preset esportati: percorsi relativi
-                                  engine.loadState (*xml);
-                                  refreshAll();
-                              }
-                          });
+                          [this] (const juce::FileChooser& fc) { loadPresetFile (fc.getResult()); });
+}
+
+void RigUI::loadPresetFile (const juce::File& f)
+{
+    if (! f.existsAsFile()) return;
+    if (auto xml = juce::XmlDocument::parse (f))
+    {
+        RigEngine::resolveRelativePaths (*xml, f.getParentDirectory());   // preset esportati: percorsi relativi
+        engine.loadState (*xml);
+        refreshAll();
+    }
 }
 
 void RigUI::exportPreset()

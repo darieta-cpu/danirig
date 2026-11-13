@@ -9,6 +9,8 @@
 #include "dsp/MultiMod.h"
 #include "dsp/DynaComp.h"
 #include "dsp/Taper.h"
+#include "dsp/IrAnalysis.h"
+#include "FileLibrary.h"
 #include "RigEngine.h"
 #include <juce_events/juce_events.h>
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -403,6 +405,68 @@ int main (int argc, char** argv)
         auto snap = e.saveSnapshot();
         CHECK (snap->getIntAttribute ("version") == 3, "le nuove scene sono marcate versione 3");
     }
+
+    std::printf ("[Libreria: recenti e preferiti]\n");
+    {
+        const auto store = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("danirig_lib_test/library.xml");
+        store.deleteFile();
+        const juce::File a ("/tmp/a.nam"), b ("/tmp/b.nam"), c ("/tmp/c.wav");
+        {
+            FileLibrary lib (store);
+            lib.addRecent (FileLibrary::Nam, a); lib.addRecent (FileLibrary::Nam, b); lib.addRecent (FileLibrary::Nam, a);
+            CHECK (lib.getRecent (FileLibrary::Nam).size() == 2 && lib.getRecent (FileLibrary::Nam)[0] == a.getFullPathName(), "recenti: ordine dal piu' recente, nessun duplicato");
+            for (int i = 0; i < 20; ++i) lib.addRecent (FileLibrary::Nam, juce::File ("/tmp/m" + juce::String (i) + ".nam"));
+            CHECK (lib.getRecent (FileLibrary::Nam).size() == FileLibrary::kMaxRecent, "recenti: massimo 12");
+            lib.addRecent (FileLibrary::Ir, c);
+            CHECK (lib.getRecent (FileLibrary::Ir).size() == 1 && lib.getRecent (FileLibrary::Ir)[0] == c.getFullPathName(), "le liste NAM e IR sono separate");
+            lib.setFavorite (FileLibrary::Nam, b, true); lib.setFavorite (FileLibrary::Nam, b, true);
+            CHECK (lib.isFavorite (FileLibrary::Nam, b) && lib.getFavorites (FileLibrary::Nam).size() == 1 && ! lib.isFavorite (FileLibrary::Ir, b), "preferiti: nessun duplicato, separati per tipo");
+        }
+        {
+            FileLibrary lib2 (store);                                   // nuova istanza = riavvio dell'app
+            CHECK (lib2.isFavorite (FileLibrary::Nam, b) && lib2.getRecent (FileLibrary::Ir).size() == 1 && lib2.getRecent (FileLibrary::Nam).size() == FileLibrary::kMaxRecent,
+                   "recenti e preferiti sopravvivono al riavvio");
+            lib2.setFavorite (FileLibrary::Nam, b, false); lib2.clearRecent (FileLibrary::Nam);
+            CHECK (! lib2.isFavorite (FileLibrary::Nam, b) && lib2.getRecent (FileLibrary::Nam).isEmpty() && lib2.getRecent (FileLibrary::Ir).size() == 1, "rimozione preferito e svuotamento recenti");
+        }
+        store.getParentDirectory().deleteRecursively();
+    }
+
+    std::printf ("[Analisi IR: spettro, durata, inviluppo]\n");
+    {
+        const juce::File ir = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("danirig_analysis_ir.wav");
+        ir.deleteFile();
+        {
+            juce::WavAudioFormat wav;
+            std::unique_ptr<juce::FileOutputStream> os (ir.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> w (wav.createWriterFor (os.get(), 48000.0, 1, 24, {}, 0));
+            if (w) { os.release(); juce::AudioBuffer<float> b (1, 64); b.clear(); for (int i = 0; i < 8; ++i) b.setSample (0, i, 0.125f); w->writeFromAudioSampleBuffer (b, 0, 64); }
+        }
+        const auto info = analyseIr (ir);
+        CHECK (info.valid && info.sampleRate == 48000.0 && info.channels == 1 && std::abs (info.lengthMs - 64.0 * 1000.0 / 48000.0) < 0.01, "dati generali: 48 kHz, mono, 1.33 ms");
+        auto at = [&] (double f) { int best = 0; for (int i = 0; i < IrInfo::kSpectrumPoints; ++i) if (std::abs (IrInfo::frequencyAt (i, info.sampleRate) - f) < std::abs (IrInfo::frequencyAt (best, info.sampleRate) - f)) best = i; return info.spectrumDb[(size_t) best]; };
+        std::printf ("       spettro: 1 kHz %.1f dB, 6 kHz %.1f dB, 10 kHz %.1f dB\n", at (1000), at (6000), at (10000));
+        CHECK (info.spectrumDb.size() == (size_t) IrInfo::kSpectrumPoints && at (10000) < at (1000) - 10.0f, "spettro: media mobile = passa-basso (10 kHz molto sotto 1 kHz)");
+        CHECK (info.envelope.size() == (size_t) IrInfo::kEnvelopePoints && info.envelope[0] > 0.99f, "inviluppo: picco all'inizio");
+        CHECK (std::abs (cabFilterDb (1000.0f, 70.0f, 14000.0f)) < 0.2f && cabFilterDb (70.0f, 70.0f, 14000.0f) < -2.9f && cabFilterDb (14000.0f, 70.0f, 14000.0f) < -2.9f && cabFilterDb (20.0f, 70.0f, 14000.0f) < -20.0f,
+               "risposta dei filtri: -3 dB alle frequenze di taglio, piatta in mezzo");
+        CHECK (! analyseIr (juce::File ("/tmp/non_esiste.wav")).valid, "file inesistente: analisi non valida");
+        ir.deleteFile();
+    }
+
+    std::printf ("[Metadati dei profili NAM]\n");
+    if (argc > 1 && juce::File (argv[1]).existsAsFile())
+    {
+        NamAmp m;
+        m.loadModelAsync (juce::File (argv[1]));           // senza audio attivo: si leggono solo i metadati
+        for (int i = 0; i < 200 && ! m.getInfo().loaded && m.getInfo().error.isEmpty(); ++i) juce::Thread::sleep (50);
+        const auto in = m.getInfo();
+        std::printf ("       %s | %s | %s\n", in.displayName().toRawUTF8(), in.technicalLine().toRawUTF8(), in.date.toRawUTF8());
+        CHECK (in.loaded && in.error.isEmpty() && in.architecture.isNotEmpty() && in.version.isNotEmpty(), "metadati letti senza audio attivo: architettura e versione");
+        CHECK (in.hasLoudness && in.hasInputDbu && in.modelRate > 0 && in.date.isNotEmpty(), "metadati: loudness, livello d'ingresso, sample rate e data");
+        CHECK (in.technicalLine().contains ("kHz") && in.tooltip().contains (in.displayName()), "testo informativo per l'interfaccia");
+    }
+    else std::printf ("  (nessun modello passato: salto)\n");
 
     std::printf ("[5 banchi x 3 patch]\n");
     {

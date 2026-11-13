@@ -5,7 +5,7 @@
 namespace dr
 {
 // Interfaccia completa del rig (1280x800 scalata alla finestra). Usata sia dall'app standalone sia dall'editor del plugin.
-class RigUI : public juce::Component, private juce::Timer
+class RigUI : public juce::Component, public juce::FileDragAndDropTarget, private juce::Timer
 {
 public:
     // audioSettings: vuota nel plugin (il device lo gestisce l'host). cpu: percentuale CPU 0..1 (vuota nel plugin).
@@ -13,6 +13,10 @@ public:
     ~RigUI() override;
 
     void paint (juce::Graphics& g) override { g.fillAll (ui::col::bg); }
+
+    // trascinando un preset .dprig sulla finestra lo si carica (i file NAM / IR vanno trascinati sul modulo giusto)
+    bool isInterestedInFileDrag (const juce::StringArray& files) override { for (auto& f : files) if (juce::File (f).hasFileExtension ("dprig")) return true; return false; }
+    void filesDropped (const juce::StringArray& files, int, int) override { for (auto& f : files) if (juce::File (f).hasFileExtension ("dprig")) { loadPresetFile (juce::File (f)); break; } }
     void resized() override;
     void refreshAll();
 
@@ -34,6 +38,7 @@ private:
     void pushOrderToEngine();
     void savePreset();
     void loadPreset();
+    void loadPresetFile (const juce::File& f);
     void exportPreset();
     void showWarningsIfAny();
 
@@ -41,6 +46,7 @@ private:
     std::function<void()> audioSettingsCb;
     std::function<double()> cpuCb;
     ui::RigLookAndFeel laf;
+    juce::TooltipWindow tooltipWindow { this, 450 };
     Content content;
 
     std::unique_ptr<ui::GatePanel> gatePanel;

@@ -1,11 +1,13 @@
 #pragma once
 #include "Controls.h"
 #include "../RigEngine.h"
+#include "../FileLibrary.h"
+#include "../dsp/IrAnalysis.h"
 
 namespace dr::ui
 {
 // Base di tutti i pannelli: disegna lo "chassis" (pedale, ampli, cab, rack) e ospita i controlli.
-class PanelBase : public juce::Component
+class PanelBase : public juce::Component, public juce::FileDragAndDropTarget
 {
 public:
     enum class Look { Stomp, Amp, Cab, Rack };
@@ -36,6 +38,19 @@ public:
         toggles.push_back (std::make_unique<LedToggle> (p, text, juce::Colour (0xff46e06b), textCol));
         addAndMakeVisible (*toggles.back());
         return toggles.back().get();
+    }
+
+    // Drag & drop di file sul pannello (profili NAM, IR): le classi derivate dicono cosa accettano
+    virtual bool acceptsFile (const juce::File&) const { return false; }
+    virtual void handleDroppedFile (const juce::File&) {}
+    bool isInterestedInFileDrag (const juce::StringArray& files) override { for (auto& f : files) if (acceptsFile (juce::File (f))) return true; return false; }
+    void fileDragEnter (const juce::StringArray&, int, int) override { dropHover = true; repaint(); }
+    void fileDragExit (const juce::StringArray&) override { dropHover = false; repaint(); }
+    void filesDropped (const juce::StringArray& files, int, int) override
+    {
+        dropHover = false;
+        for (auto& f : files) if (acceptsFile (juce::File (f))) { handleDroppedFile (juce::File (f)); break; }
+        repaint();
     }
 
     // Riordino: si trascina dalla fascia alta (primi 26 px) del pannello.
@@ -86,6 +101,11 @@ public:
             case Look::Amp:   paintAmp (g, r);   break;
             case Look::Cab:   paintCab (g, r);   break;
             case Look::Rack:  paintRack (g, r);  break;
+        }
+        if (dropHover)     // evidenzia il pannello mentre ci si trascina sopra un file
+        {
+            g.setColour (col::gold.withAlpha (0.16f)); g.fillRoundedRectangle (r, 10.0f);
+            g.setColour (col::gold); g.drawRoundedRectangle (r.reduced (2.0f), 10.0f, 3.0f);
         }
         if (reorderable)   // maniglia di trascinamento
         {
@@ -175,7 +195,7 @@ protected:
     }
 
     juce::Rectangle<int> titleArea;
-    bool dragging = false;
+    bool dragging = false, dropHover = false;
     int grabX = 0;
     std::vector<std::unique_ptr<Knob>> knobs;
     std::vector<std::unique_ptr<ChoiceBox>> choices;
@@ -213,6 +233,71 @@ public:
 
 private:
     std::unique_ptr<juce::FileChooser> chooser;
+};
+
+// ---------------------------------------------------------------------------------------------
+// Menu "LIB": preferiti e file recenti, per scegliere in un attimo un file usato di recente
+inline void showFileMenu (juce::Component& target, FileLibrary::Kind kind, const juce::File& current,
+                          std::function<void (const juce::File&)> onPick, std::function<void()> onBrowse)
+{
+    auto& lib = FileLibrary::shared();
+    const auto favs = lib.getFavorites (kind), recs = lib.getRecent (kind);
+    auto label = [] (const juce::File& f) { return f.getFileNameWithoutExtension() + "   (" + f.getParentDirectory().getFileName() + ")"; };
+    juce::PopupMenu m;
+    m.addSectionHeader ("PREFERITI");
+    if (favs.isEmpty()) m.addItem (-1, "(nessun preferito)", false);
+    for (int i = 0; i < favs.size(); ++i)
+    {
+        const juce::File f (favs[i]);
+        m.addItem (1 + i, label (f) + (f.existsAsFile() ? "" : "   [non trovato]"), f.existsAsFile(), f == current);
+    }
+    m.addSectionHeader ("RECENTI");
+    if (recs.isEmpty()) m.addItem (-2, "(nessun file recente)", false);
+    for (int i = 0; i < recs.size(); ++i)
+    {
+        const juce::File f (recs[i]);
+        m.addItem (100 + i, label (f) + (f.existsAsFile() ? "" : "   [non trovato]"), f.existsAsFile(), f == current);
+    }
+    m.addSeparator();
+    m.addItem (1000, "Sfoglia...");
+    if (current.existsAsFile())
+        m.addItem (1001, (lib.isFavorite (kind, current) ? "Rimuovi dai preferiti: " : "Aggiungi ai preferiti: ") + current.getFileNameWithoutExtension());
+    m.addItem (1002, "Svuota i recenti", ! recs.isEmpty());
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (&target),
+                     [kind, current, favs, recs, onPick, onBrowse] (int r)
+                     {
+                         auto& l = FileLibrary::shared();
+                         if (r >= 1 && r <= favs.size()) onPick (juce::File (favs[r - 1]));
+                         else if (r >= 100 && r < 100 + recs.size()) onPick (juce::File (recs[r - 100]));
+                         else if (r == 1000) onBrowse();
+                         else if (r == 1001) l.setFavorite (kind, current, ! l.isFavorite (kind, current));
+                         else if (r == 1002) l.clearRecent (kind);
+                     });
+}
+
+// Riquadro con il nome del profilo NAM e, al passaggio del mouse, tutte le informazioni (tooltip)
+class SlotInfoBox : public juce::Component, public juce::TooltipClient
+{
+public:
+    std::function<ModelInfo()> provider;
+    void paint (juce::Graphics& g) override
+    {
+        auto r = getLocalBounds().toFloat();
+        g.setColour (juce::Colours::black.withAlpha (0.55f)); g.fillRoundedRectangle (r, 4.0f);
+        if (! provider) return;
+        const auto info = provider();
+        const juce::String t = info.error.isNotEmpty() ? info.error : info.loading ? juce::String ("Caricamento...")
+                             : info.name.isEmpty() ? juce::String ("Nessun profilo - trascina qui un .nam") : info.displayName();
+        g.setColour (info.error.isNotEmpty() ? juce::Colours::orange : info.name.isEmpty() ? juce::Colours::white.withAlpha (0.55f) : juce::Colours::white);
+        g.setFont (uiFont (12.0f, true));
+        g.drawFittedText (t, getLocalBounds().reduced (6, 0), juce::Justification::centredLeft, 1);
+    }
+    juce::String getTooltip() override
+    {
+        if (! provider) return {};
+        const auto info = provider();
+        return info.name.isEmpty() || info.error.isNotEmpty() ? juce::String() : info.tooltip();
+    }
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -322,19 +407,25 @@ public:
         norm = addToggle (*a.normalize, "AUTO");
         sizeBox = addChoice (*a.quality);
         sizeBox->extra = [this] { pedal.reloadCurrent(); };
-        addAndMakeVisible (load); addAndMakeVisible (prev); addAndMakeVisible (next);
-        load.setButtonText ("LOAD..."); prev.setButtonText ("<"); next.setButtonText (">");
-        load.onClick = [this] { stepper.choose ("Scegli il profilo NAM di un pedale", "*.nam", [this] (const juce::File& f) { pedal.loadModelAsync (f); }); };
+        slotBox.provider = [this] { return pedal.getInfo(); };
+        addAndMakeVisible (slotBox);
+        for (auto* b : { &load, &prev, &next, &lib }) addAndMakeVisible (*b);
+        load.setButtonText ("LOAD..."); prev.setButtonText ("<"); next.setButtonText (">"); lib.setButtonText ("LIB");
+        load.onClick = [this] { stepper.choose ("Scegli il profilo NAM di un pedale", "*.nam", [this] (const juce::File& f) { pick (f); }); };
+        lib.onClick = [this] { showFileMenu (lib, FileLibrary::Nam, juce::File (pedal.getModelPath()), [this] (const juce::File& f) { pick (f); }, [this] { load.triggerClick(); }); };
         prev.onClick = [this] { auto f = FileStepper::step (juce::File (pedal.getModelPath()), ".nam", -1); if (f.existsAsFile()) pedal.loadModelAsync (f); };
         next.onClick = [this] { auto f = FileStepper::step (juce::File (pedal.getModelPath()), ".nam", +1); if (f.existsAsFile()) pedal.loadModelAsync (f); };
     }
+
+    bool acceptsFile (const juce::File& f) const override { return f.hasFileExtension ("nam"); }
+    void handleDroppedFile (const juce::File& f) override { pick (f); }
 
     void resized() override
     {
         const int w = getWidth();
         titleArea = juce::Rectangle<int> (10, 6, 82, 22);
-        slotArea = juce::Rectangle<int> (12, 32, w - 24, 22);
-        prev.setBounds (12, 58, 32, 24); next.setBounds (w - 44, 58, 32, 24); load.setBounds (48, 58, w - 96, 24);
+        slotBox.setBounds (12, 32, w - 24, 22);
+        prev.setBounds (10, 58, 28, 24); load.setBounds (40, 58, w - 40 - 74, 24); lib.setBounds (w - 72, 58, 32, 24); next.setBounds (w - 38, 58, 28, 24);
         knobs[0]->setBounds (4, 86, 60, 78); knobs[1]->setBounds (64, 86, 60, 78);
         norm->setBounds (w - 70, 96, 66, 22);
         sizeBox->setBounds (w - 68, 126, 60, 26);
@@ -348,24 +439,20 @@ public:
         g.drawText (module.title, a, juce::Justification::centredLeft);
     }
 
-    void paint (juce::Graphics& g) override
+private:
+    void pick (const juce::File& f)
     {
-        PanelBase::paint (g);
-        auto info = pedal.getInfo();
-        auto s = slotArea.toFloat();
-        g.setColour (juce::Colours::black.withAlpha (0.55f)); g.fillRoundedRectangle (s, 4.0f);
-        g.setFont (uiFont (12.0f, true));
-        g.setColour (info.error.isNotEmpty() ? juce::Colours::orange : juce::Colours::white);
-        auto t = info.error.isNotEmpty() ? info.error : info.loading ? juce::String ("Caricamento...") : info.name.isEmpty() ? juce::String ("Nessun profilo") : info.name;
-        g.drawFittedText (t, slotArea.reduced (6, 0), juce::Justification::centredLeft, 1);
+        pedal.loadModelAsync (f);
+        FileLibrary::shared().addRecent (FileLibrary::Nam, f);
+        FileStepper::lastDir() = f.getParentDirectory();
+        repaint();
     }
 
-private:
     NamAmp& pedal;
     FileStepper stepper;
-    juce::TextButton load, prev, next;
+    SlotInfoBox slotBox;
+    juce::TextButton load, prev, next, lib;
     LedToggle* norm; ChoiceBox* sizeBox;
-    juce::Rectangle<int> slotArea;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -379,12 +466,16 @@ public:
         norm = addToggle (*a.normalize, "AUTO LEVEL");
         sizeBox = addChoice (*a.quality);
         sizeBox->extra = [this] { amp.reloadCurrent(); };
-        addAndMakeVisible (load); addAndMakeVisible (prev); addAndMakeVisible (next);
-        load.onClick = [this] { stepper.choose ("Scegli un profilo NAM", "*.nam", [this] (const juce::File& f) { amp.loadModelAsync (f); }); };
+        for (auto* b : { &load, &prev, &next, &lib }) addAndMakeVisible (*b);
+        load.onClick = [this] { stepper.choose ("Scegli un profilo NAM", "*.nam", [this] (const juce::File& f) { pick (f); }); };
+        lib.onClick = [this] { showFileMenu (lib, FileLibrary::Nam, juce::File (amp.getModelPath()), [this] (const juce::File& f) { pick (f); }, [this] { load.triggerClick(); }); };
         prev.onClick = [this] { auto f = FileStepper::step (juce::File (amp.getModelPath()), ".nam", -1); if (f.existsAsFile()) amp.loadModelAsync (f); };
         next.onClick = [this] { auto f = FileStepper::step (juce::File (amp.getModelPath()), ".nam", +1); if (f.existsAsFile()) amp.loadModelAsync (f); };
-        load.setButtonText ("LOAD MODEL..."); prev.setButtonText ("<"); next.setButtonText (">");
+        load.setButtonText ("LOAD MODEL..."); prev.setButtonText ("<"); next.setButtonText (">"); lib.setButtonText ("LIB");
     }
+
+    bool acceptsFile (const juce::File& f) const override { return f.hasFileExtension ("nam"); }
+    void handleDroppedFile (const juce::File& f) override { pick (f); }
 
     void resized() override
     {
@@ -396,7 +487,8 @@ public:
         auto btns = left.removeFromTop (34);
         prev.setBounds (btns.removeFromLeft (40));
         next.setBounds (btns.removeFromRight (40));
-        load.setBounds (btns.reduced (6, 0));
+        lib.setBounds (btns.removeFromRight (46).reduced (3, 0));
+        load.setBounds (btns.reduced (4, 0));
         auto right = r.removeFromRight (190);
         norm->setBounds (right.getX(), right.getY() + 14, 160, 28);
         sizeArea = juce::Rectangle<int> (right.getX(), right.getY() + 62, 160, 18);
@@ -408,43 +500,68 @@ public:
     void paint (juce::Graphics& g) override
     {
         PanelBase::paint (g);
-        auto info = amp.getInfo();
+        const auto info = amp.getInfo();
         auto s = slotArea.toFloat();
         g.setColour (juce::Colour (0xff0b0d0f)); g.fillRoundedRectangle (s, 5.0f);
         g.setColour (col::gold.withAlpha (0.5f)); g.drawRoundedRectangle (s, 5.0f, 1.0f);
+        auto in = slotArea.reduced (10, 5);
+        const bool none = info.name.isEmpty();
         g.setFont (uiFont (17.0f, true));
-        g.setColour (info.error.isNotEmpty() ? juce::Colours::orangered : col::text);
-        auto nameText = info.error.isNotEmpty() ? info.error : (info.name.isEmpty() ? juce::String ("Nessun modello caricato") : info.name);
-        g.drawFittedText (nameText, slotArea.reduced (10, 6).removeFromTop (30), juce::Justification::centredLeft, 1);
-        g.setFont (uiFont (12.0f)); g.setColour (col::dim);
-        juce::String detail = info.loading ? "Caricamento..." : info.loaded ? juce::String (info.slimmable ? "A2 / slimmable" : "NAM") + "  -  " + juce::String (info.modelRate / 1000.0, 1) + " kHz" : "";
-        g.drawText (detail, slotArea.reduced (10, 6).removeFromBottom (24), juce::Justification::centredLeft);
+        g.setColour (info.error.isNotEmpty() ? juce::Colours::orangered : none ? col::dim : col::text);
+        g.drawFittedText (info.error.isNotEmpty() ? info.error : none ? juce::String ("Nessun modello - trascina qui un .nam") : info.displayName(),
+                          in.removeFromTop (24), juce::Justification::centredLeft, 1);
+        if (none || info.error.isNotEmpty()) return;
+        g.setColour (col::gold.withAlpha (0.9f)); g.setFont (uiFont (12.0f, true));
+        const auto gear = info.gearLine();
+        g.drawFittedText (info.loading ? juce::String ("Caricamento...") : gear.isNotEmpty() ? gear : (info.modeledBy.isNotEmpty() ? "da " + info.modeledBy : juce::String()),
+                          in.removeFromTop (18), juce::Justification::centredLeft, 1);
+        g.setColour (col::dim); g.setFont (uiFont (11.0f));
+        g.drawFittedText (info.technicalLine(), in.removeFromTop (16), juce::Justification::centredLeft, 1);
         g.setColour (col::gold); g.setFont (uiFont (11.0f, true));
         g.drawText ("A2 SIZE", sizeArea, juce::Justification::centredLeft);
     }
 
 private:
+    void pick (const juce::File& f)
+    {
+        amp.loadModelAsync (f);
+        FileLibrary::shared().addRecent (FileLibrary::Nam, f);
+        FileStepper::lastDir() = f.getParentDirectory();
+        repaint();
+    }
+
     NamAmp& amp;
     FileStepper stepper;
-    juce::TextButton load, prev, next;
+    juce::TextButton load, prev, next, lib;
     LedToggle* norm; ChoiceBox* sizeBox;
     juce::Rectangle<int> slotArea, sizeArea;
 };
 
-class CabPanel : public PanelBase
+// ---------------------------------------------------------------------------------------------
+// Cabinet: caricamento IR + grafico (spettro dell'IR, effetto dei filtri, inviluppo temporale)
+class CabPanel : public PanelBase, private juce::Timer
 {
 public:
     explicit CabPanel (CabIR& c)
         : PanelBase (c, Look::Cab, juce::Colour (0xff17181a), col::text, juce::Colour (0xffb5a77c), juce::Colour (0xff1a1710)), cab (c)
     {
-        for (auto* p : { c.params[1].get(), c.params[2].get(), c.params[3].get() }) addKnob (*p);
-        addAndMakeVisible (load); addAndMakeVisible (clear); addAndMakeVisible (prev); addAndMakeVisible (next);
-        load.setButtonText ("LOAD IR..."); clear.setButtonText ("X"); prev.setButtonText ("<"); next.setButtonText (">");
-        load.onClick = [this] { stepper.choose ("Scegli un file IR", "*.wav;*.aif;*.aiff;*.flac", [this] (const juce::File& f) { cab.loadIR (f); repaint(); }); };
+        for (const char* id : { "lowcut", "highcut", "level" }) addKnob (*c.find (id));
+        for (auto* b : { &load, &clear, &prev, &next, &lib }) addAndMakeVisible (*b);
+        load.setButtonText ("LOAD IR..."); clear.setButtonText ("X"); prev.setButtonText ("<"); next.setButtonText (">"); lib.setButtonText ("LIB");
+        load.onClick = [this] { stepper.choose ("Scegli un file IR", "*.wav;*.aif;*.aiff;*.flac;*.ogg", [this] (const juce::File& f) { pick (f); }); };
+        lib.onClick = [this] { showFileMenu (lib, FileLibrary::Ir, juce::File (cab.getIRPath()), [this] (const juce::File& f) { pick (f); }, [this] { load.triggerClick(); }); };
         clear.onClick = [this] { cab.clearIR(); repaint(); };
         prev.onClick = [this] { stepIr (-1); };
         next.onClick = [this] { stepIr (+1); };
+        startTimerHz (5);
     }
+    ~CabPanel() override { stopTimer(); }
+
+    bool acceptsFile (const juce::File& f) const override
+    {
+        return f.hasFileExtension ("wav") || f.hasFileExtension ("aif") || f.hasFileExtension ("aiff") || f.hasFileExtension ("flac") || f.hasFileExtension ("ogg");
+    }
+    void handleDroppedFile (const juce::File& f) override { pick (f); }
 
     void resized() override
     {
@@ -454,32 +571,141 @@ public:
         slotArea = r.removeFromTop (26);
         auto b = r.removeFromTop (30).reduced (0, 2);
         prev.setBounds (b.removeFromLeft (34)); clear.setBounds (b.removeFromRight (34)); next.setBounds (b.removeFromRight (34));
-        load.setBounds (b.reduced (6, 0));
+        lib.setBounds (b.removeFromRight (44).reduced (3, 0));
+        load.setBounds (b.reduced (4, 0));
+        r.removeFromTop (4);
+        graphArea = r.removeFromLeft (238).withTrimmedBottom (2);
+        r.removeFromLeft (6);
         std::vector<Knob*> ks; for (auto& k : knobs) ks.push_back (k.get());
-        rowOfKnobs (r.withTrimmedTop (22), ks);
+        rowOfKnobs (r.withTrimmedTop (6), ks);
     }
 
     void paint (juce::Graphics& g) override
     {
         PanelBase::paint (g);
         const auto path = cab.getIRPath();
+        auto name = slotArea;
+        if (info != nullptr && info->valid && path.isNotEmpty())
+        {
+            const auto len = info->lengthMs < 1000.0 ? juce::String (juce::roundToInt (info->lengthMs)) + " ms" : juce::String (info->lengthMs / 1000.0, 2) + " s";
+            const auto txt = len + " - " + juce::String (info->sampleRate / 1000.0, 1) + " kHz - " + (info->channels == 1 ? juce::String ("mono") : juce::String (info->channels) + " ch");
+            g.setColour (col::dim); g.setFont (uiFont (11.0f));
+            g.drawText (txt, name.removeFromRight (150), juce::Justification::centredRight);
+        }
         g.setFont (uiFont (14.0f, true));
         g.setColour (path.isEmpty() ? col::dim : col::text);
-        g.drawFittedText (path.isEmpty() ? juce::String ("Nessun IR caricato (cab bypassato)") : juce::File (path).getFileNameWithoutExtension(),
-                          slotArea, juce::Justification::centredLeft, 1);
+        g.drawFittedText (path.isEmpty() ? juce::String ("Nessun IR - trascina qui un file .wav (cab bypassato)") : juce::File (path).getFileNameWithoutExtension(),
+                          name, juce::Justification::centredLeft, 1);
+        paintGraph (g, graphArea.toFloat());
     }
 
 private:
+    void pick (const juce::File& f)
+    {
+        cab.loadIR (f);
+        FileLibrary::shared().addRecent (FileLibrary::Ir, f);
+        FileStepper::lastDir() = f.getParentDirectory();
+        repaint();
+    }
+
     void stepIr (int dir)
     {
         const juce::File cur (cab.getIRPath());
         auto f = FileStepper::step (cur, cur.getFileExtension(), dir);
         if (f.existsAsFile()) { cab.loadIR (f); repaint(); }
     }
+
+    // L'analisi dell'IR (FFT) gira in background; il risultato arriva sul thread messaggi.
+    void timerCallback() override
+    {
+        const auto path = cab.getIRPath();
+        if (path == requestedPath) { if (info != nullptr && info->valid) repaint (graphArea); return; }   // i tagli cambiano la curva
+        requestedPath = path;
+        const int gen = ++generation;
+        if (path.isEmpty()) { info = nullptr; repaint(); return; }
+        pool.removeAllJobs (false, 0);
+        pool.addJob ([this, path, gen]
+        {
+            auto res = std::make_shared<const IrInfo> (analyseIr (juce::File (path)));
+            juce::MessageManager::callAsync ([safe = juce::Component::SafePointer<CabPanel> (this), res, gen]
+            {
+                if (safe != nullptr && gen == safe->generation.load()) { safe->info = res; safe->repaint(); }
+            });
+        });
+    }
+
+    void paintGraph (juce::Graphics& g, juce::Rectangle<float> r)
+    {
+        g.setColour (juce::Colour (0xff0a0907)); g.fillRoundedRectangle (r, 5.0f);
+        g.setColour (col::gold.withAlpha (0.35f)); g.drawRoundedRectangle (r, 5.0f, 1.0f);
+        if (info == nullptr || ! info->valid)
+        {
+            g.setColour (col::dim); g.setFont (uiFont (11.0f));
+            g.drawFittedText (cab.getIRPath().isEmpty() ? "Spettro dell'IR\\n(carica un file)" : "Analisi in corso...", r.toNearestInt(), juce::Justification::centred, 2);
+            return;
+        }
+        auto inner = r.reduced (5.0f, 4.0f);
+        auto wave = inner.removeFromBottom (18.0f);
+        inner.removeFromBottom (3.0f);
+        auto labels = inner.removeFromBottom (10.0f);
+        inner.removeFromLeft (16.0f);
+        const auto plot = inner;
+        constexpr float dbLo = -36.0f, dbHi = 18.0f;
+        auto yOf = [&] (float db) { return plot.getBottom() - (juce::jlimit (dbLo, dbHi, db) - dbLo) / (dbHi - dbLo) * plot.getHeight(); };
+        const int n = IrInfo::kSpectrumPoints;
+        const double fMax = std::min (20000.0, info->sampleRate * 0.49);
+        auto xOfF = [&] (double f) { return plot.getX() + plot.getWidth() * (float) (std::log (f / 20.0) / std::log (fMax / 20.0)); };
+
+        g.setFont (uiFont (8.5f)); 
+        for (double f : { 100.0, 1000.0, 10000.0 })
+        {
+            if (f > fMax) continue;
+            const float x = xOfF (f);
+            g.setColour (juce::Colours::white.withAlpha (0.10f)); g.drawVerticalLine ((int) x, plot.getY(), plot.getBottom());
+            g.setColour (col::dim); g.drawText (f >= 1000 ? juce::String ((int) (f / 1000)) + "k" : juce::String ((int) f), juce::Rectangle<float> (x - 12, labels.getY(), 24, labels.getHeight()), juce::Justification::centred);
+        }
+        for (float db : { 0.0f, -20.0f })
+        {
+            g.setColour (juce::Colours::white.withAlpha (db == 0.0f ? 0.18f : 0.08f)); g.drawHorizontalLine ((int) yOf (db), plot.getX(), plot.getRight());
+            g.setColour (col::dim); g.drawText (juce::String ((int) db), juce::Rectangle<float> (r.getX() + 2, yOf (db) - 5, 20, 10), juce::Justification::centredLeft);
+        }
+
+        const float lowCut = cab.find ("lowcut")->get(), highCut = cab.find ("highcut")->get();
+        juce::Path raw, result, fill;
+        for (int i = 0; i < n; ++i)
+        {
+            const float f = IrInfo::frequencyAt (i, info->sampleRate);
+            const float x = plot.getX() + plot.getWidth() * (float) i / (float) (n - 1);
+            const float db = info->spectrumDb[(size_t) i];
+            const float yr = yOf (db), ys = yOf (db + cabFilterDb (f, lowCut, highCut));
+            if (i == 0) { raw.startNewSubPath (x, yr); result.startNewSubPath (x, ys); fill.startNewSubPath (x, plot.getBottom()); fill.lineTo (x, yr); }
+            else { raw.lineTo (x, yr); result.lineTo (x, ys); fill.lineTo (x, yr); }
+        }
+        fill.lineTo (plot.getRight(), plot.getBottom()); fill.closeSubPath();
+        g.setColour (col::gold.withAlpha (0.14f)); g.fillPath (fill);
+        g.setColour (col::gold.withAlpha (0.55f)); g.strokePath (raw, juce::PathStrokeType (1.0f));
+        g.setColour (juce::Colours::white.withAlpha (0.92f)); g.strokePath (result, juce::PathStrokeType (1.4f));
+
+        // inviluppo temporale (tutta la durata dell'IR)
+        g.setColour (juce::Colours::black.withAlpha (0.35f)); g.fillRoundedRectangle (wave, 3.0f);
+        const int m = IrInfo::kEnvelopePoints;
+        g.setColour (col::gold.withAlpha (0.8f));
+        for (int b = 0; b < m; ++b)
+        {
+            const float x = wave.getX() + wave.getWidth() * (float) b / (float) m;
+            const float h = std::max (0.5f, info->envelope[(size_t) b] * wave.getHeight() * 0.5f);
+            g.drawLine (x, wave.getCentreY() - h, x, wave.getCentreY() + h, 1.0f);
+        }
+    }
+
     CabIR& cab;
     FileStepper stepper;
-    juce::TextButton load, clear, prev, next;
-    juce::Rectangle<int> slotArea;
+    juce::TextButton load, clear, prev, next, lib;
+    juce::Rectangle<int> slotArea, graphArea;
+    juce::String requestedPath;
+    std::shared_ptr<const IrInfo> info;
+    std::atomic<int> generation { 0 };
+    juce::ThreadPool pool { 1 };    // ultimo membro: distrutto per primo
 };
 
 class DelayPanel : public PanelBase
